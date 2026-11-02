@@ -9,17 +9,39 @@ from langgraph.graph.state import CompiledStateGraph
 from app.agents.nodes import (
     node_assess_blast_radius,
     node_await_approval,
+    node_correlate_evidence,
     node_execute_remediation,
+    node_expand_diagnostics,
     node_formulate_rca,
     node_gather_telemetry,
     node_generate_postmortem,
     node_ingest_alert,
-    node_retrieve_runbooks,
+    node_persist_incident_memory,
+    node_retrieve_qdrant,
     node_verify_health,
 )
 from app.schemas.agent_state import ApprovalStatus, InvestigationState
 
 logger = logging.getLogger("incident_agent.agents.graph")
+
+
+def route_evidence_sufficiency(
+    state: InvestigationState,
+) -> Literal["formulate_rca", "expand_diagnostics"]:
+    """Conditional Edge: Evaluates whether collected diagnostic evidence is sufficient."""
+    evidence = state.get("evidence", [])
+    retry_count = state.get("retry_count", 0)
+
+    if len(evidence) >= 2 or retry_count >= 1:
+        logger.info(
+            f"[Router: EvidenceSufficiency] Sufficient evidence ({len(evidence)} items, retries={retry_count}) -> Proceeding to RCA."
+        )
+        return "formulate_rca"
+
+    logger.warning(
+        f"[Router: EvidenceSufficiency] Insufficient evidence ({len(evidence)} items) -> Branching to expand diagnostics (retry {retry_count + 1})."
+    )
+    return "expand_diagnostics"
 
 
 def route_after_blast_radius(
@@ -38,12 +60,18 @@ def route_after_blast_radius(
 
 def route_after_approval(
     state: InvestigationState,
-) -> Literal["execute_remediation", "generate_postmortem"]:
-    """Routes execution based on human decision."""
+) -> Literal["execute_remediation", "expand_diagnostics", "generate_postmortem"]:
+    """Routes execution based on reviewer decision: approve, reject, or request more diagnostics."""
     status = state.get("approval_status")
     if status in (ApprovalStatus.APPROVED, ApprovalStatus.AUTO_APPROVED):
         logger.info("[Router: ApprovalGate] Action approved -> Proceeding to execution.")
         return "execute_remediation"
+    if status == ApprovalStatus.DIAGNOSTICS_REQUESTED:
+        logger.info(
+            "[Router: ApprovalGate] Operator requested more diagnostics -> Routing back to diagnostics."
+        )
+        return "expand_diagnostics"
+
     logger.warning(
         "[Router: ApprovalGate] Action rejected or aborted -> Skipping execution to postmortem."
     )
@@ -56,29 +84,48 @@ def create_investigation_graph(
     """Constructs and compiles the enterprise LangGraph Incident Investigation Workflow.
 
     Features:
-    - Directed acyclic state graph with deterministic execution order.
+    - Parallel diagnostic telemetry & Qdrant retrieval.
+    - Evidence correlation and sufficiency feedback loop.
     - Checkpointed state persistence across every node.
-    - Human-in-the-Loop interruption gate ('await_approval') for high-blast-radius actions.
+    - Human-in-the-Loop interruption gate ('await_approval') with resume & diagnostic re-entry.
     - Post-remediation health verification feedback loop.
+    - Incident memory persistence into Qdrant for continuous learning.
     """
     workflow = StateGraph(InvestigationState)
 
     # 1. Register Nodes
     workflow.add_node("ingest_alert", node_ingest_alert)
     workflow.add_node("gather_telemetry", node_gather_telemetry)
-    workflow.add_node("retrieve_runbooks", node_retrieve_runbooks)
+    workflow.add_node("retrieve_qdrant", node_retrieve_qdrant)
+    workflow.add_node("correlate_evidence", node_correlate_evidence)
+    workflow.add_node("expand_diagnostics", node_expand_diagnostics)
     workflow.add_node("formulate_rca", node_formulate_rca)
     workflow.add_node("assess_blast_radius", node_assess_blast_radius)
     workflow.add_node("await_approval", node_await_approval)
     workflow.add_node("execute_remediation", node_execute_remediation)
     workflow.add_node("verify_health", node_verify_health)
+    workflow.add_node("persist_incident_memory", node_persist_incident_memory)
     workflow.add_node("generate_postmortem", node_generate_postmortem)
 
     # 2. Register Edges
     workflow.add_edge(START, "ingest_alert")
     workflow.add_edge("ingest_alert", "gather_telemetry")
-    workflow.add_edge("gather_telemetry", "retrieve_runbooks")
-    workflow.add_edge("retrieve_runbooks", "formulate_rca")
+    workflow.add_edge("gather_telemetry", "retrieve_qdrant")
+    workflow.add_edge("retrieve_qdrant", "correlate_evidence")
+
+    # Conditional Branching: Evidence Sufficiency Check
+    workflow.add_conditional_edges(
+        "correlate_evidence",
+        route_evidence_sufficiency,
+        {
+            "formulate_rca": "formulate_rca",
+            "expand_diagnostics": "expand_diagnostics",
+        },
+    )
+
+    # Diagnostics loop routes back to correlate_evidence
+    workflow.add_edge("expand_diagnostics", "correlate_evidence")
+
     workflow.add_edge("formulate_rca", "assess_blast_radius")
 
     # Conditional Branching after Blast Radius Assessment
@@ -91,18 +138,20 @@ def create_investigation_graph(
         },
     )
 
-    # Conditional Branching after Human Decision
+    # Conditional Branching after Human Decision (Approve / Reject / Diagnostics Requested)
     workflow.add_conditional_edges(
         "await_approval",
         route_after_approval,
         {
             "execute_remediation": "execute_remediation",
+            "expand_diagnostics": "expand_diagnostics",
             "generate_postmortem": "generate_postmortem",
         },
     )
 
     workflow.add_edge("execute_remediation", "verify_health")
-    workflow.add_edge("verify_health", "generate_postmortem")
+    workflow.add_edge("verify_health", "persist_incident_memory")
+    workflow.add_edge("persist_incident_memory", "generate_postmortem")
     workflow.add_edge("generate_postmortem", END)
 
     saver = checkpointer if checkpointer is not None else MemorySaver()

@@ -70,14 +70,27 @@ class InvestigationService:
             "severity": severity,
             "status": IncidentStatus.OPEN,
             "iteration_count": 0,
+            "retry_count": 0,
+            "messages": [f"Triggered investigation for incident {incident_id} on {service}"],
+            "affected_services": [service],
+            "log_findings": [],
+            "metrics": None,
+            "deployments": [],
+            "retrieved_incidents": [],
+            "hypotheses": [],
+            "evidence": [],
+            "pending_action": None,
+            "approval_status": ApprovalStatus.PENDING,
+            "approval_reason": None,
+            "executed_actions": [],
+            "errors": [],
+            "verification_results": None,
             "telemetry": None,
             "log_signatures": [],
             "matched_runbook_ids": [],
             "rca_hypotheses": [],
             "selected_hypothesis": None,
             "remediation_proposal": None,
-            "approval_status": ApprovalStatus.PENDING,
-            "approval_reason": None,
             "execution_result": None,
             "verification_report": None,
             "postmortem": None,
@@ -130,6 +143,7 @@ class InvestigationService:
         incident_id: str,
         approved: bool,
         reason: str = "",
+        request_more_diagnostics: bool = False,
     ) -> dict[str, Any]:
         """Submits human-in-the-loop decision and resumes paused LangGraph execution."""
         config = self._get_config(incident_id)
@@ -145,10 +159,15 @@ class InvestigationService:
                 reason=f"Investigation {incident_id} is not paused at an approval gate.",
             )
 
-        new_status = ApprovalStatus.APPROVED if approved else ApprovalStatus.REJECTED
-        decision_reason = reason or (
-            "Approved by on-call SRE" if approved else "Rejected by on-call SRE"
-        )
+        if request_more_diagnostics:
+            new_status = ApprovalStatus.DIAGNOSTICS_REQUESTED
+            decision_reason = reason or "Operator requested additional diagnostic evidence."
+        elif approved:
+            new_status = ApprovalStatus.APPROVED
+            decision_reason = reason or "Approved by on-call SRE"
+        else:
+            new_status = ApprovalStatus.REJECTED
+            decision_reason = reason or "Rejected by on-call SRE"
 
         logger.info(
             f"Submitting human decision for incident {incident_id}: {new_status.value} ({decision_reason})"
@@ -260,9 +279,7 @@ class InvestigationService:
                     summary="Top error log signatures",
                     payload={
                         "signatures": [
-                            sig.model_dump(mode="json")
-                            if hasattr(sig, "model_dump")
-                            else dict(sig)
+                            sig.model_dump(mode="json") if hasattr(sig, "model_dump") else dict(sig)
                             for sig in logs
                         ]
                     },

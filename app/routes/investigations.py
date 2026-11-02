@@ -126,3 +126,23 @@ async def reject_remediation(
         approved=False,
         reason=payload.reason,
     )
+
+
+@router.post(
+    "/{incident_id}/diagnostics",
+    response_model=dict[str, Any],
+    status_code=status.HTTP_200_OK,
+    summary="Request Additional Diagnostics",
+)
+async def request_diagnostics(
+    incident_id: str,
+    payload: HumanDecisionRequest,
+    service: InvestigationService = Depends(get_investigation_service),
+) -> dict[str, Any]:
+    """Requests additional diagnostic data gathering and loops back into investigation."""
+    return await service.submit_human_approval(
+        incident_id=incident_id,
+        approved=False,
+        reason=payload.reason,
+        request_more_diagnostics=True,
+    )

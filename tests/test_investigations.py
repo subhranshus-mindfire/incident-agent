@@ -254,3 +254,89 @@ async def test_investigations_api_endpoints(client: httpx.AsyncClient):
     appr_data = approve_res.json()
     assert appr_data["completed"] is True
     assert appr_data["state"]["approval_status"] == "approved"
+
+
+@pytest.mark.asyncio
+async def test_diagnostics_request_feedback_loop(client: httpx.AsyncClient):
+    """Tests Section 7/9 requirement: Operator can request more diagnostics to loop back."""
+    payload = {
+        "service": "payment-api",
+        "symptoms": "HTTP 500 errors and pool exhaustion",
+        "severity": "critical",
+    }
+    trigger_res = await client.post("/api/v1/investigations/trigger", json=payload)
+    assert trigger_res.status_code == 200
+    data = trigger_res.json()
+    incident_id = data["incident_id"]
+    assert data["is_awaiting_approval"] is True
+
+    # SRE requests more diagnostics
+    diag_res = await client.post(
+        f"/api/v1/investigations/{incident_id}/diagnostics",
+        json={"reason": "Requesting broader 30m window and downstream postgres checks."},
+    )
+    assert diag_res.status_code == 200
+    diag_data = diag_res.json()
+    resumed_state = diag_data["state"]
+    # Verify retry count incremented and diagnostics expanded
+    assert resumed_state.get("retry_count", 0) >= 1
+    assert any("Diagnostics expanded" in msg for msg in resumed_state.get("messages", []))
+
+
+@pytest.mark.asyncio
+async def test_required_seven_tools_contract():
+    """Validates the 7 required functional tools defined in Section 6."""
+    from app.tools import (
+        create_incident_report,
+        execute_remediation,
+        fetch_application_logs,
+        get_recent_deployments,
+        get_service_dependencies,
+        get_system_metrics,
+        search_past_incidents,
+    )
+
+    # 1. fetch_application_logs
+    logs = await fetch_application_logs("payment-api", time_range_minutes=15)
+    assert len(logs) > 0
+
+    # 2. get_system_metrics
+    metrics = await get_system_metrics("payment-api")
+    assert metrics.http_error_rate_pct >= 0.0
+
+    # 3. get_recent_deployments
+    deployments = get_recent_deployments("payment-api")
+    assert len(deployments) >= 1
+    assert deployments[0].version == "v2.3.1"
+
+    # 4. get_service_dependencies
+    deps = get_service_dependencies("payment-api")
+    assert "postgres" in deps.downstream_services
+    assert "order-service" in deps.upstream_services
+
+    # 5. search_past_incidents
+    past = await search_past_incidents("connection pool timeout", service="payment-api")
+    assert isinstance(past, list)
+
+    # 6. execute_remediation
+    rem_res = await execute_remediation(
+        action="ROLLBACK_DEPLOYMENT", service="payment-api", approval_id="appr-123"
+    )
+    assert rem_res.success is True
+
+    # 7. create_incident_report
+    mock_state = {
+        "incident_id": "test-123",
+        "service": "payment-api",
+        "symptoms": "Pool exhaustion",
+        "severity": IncidentSeverity.CRITICAL,
+        "status": IncidentStatus.RESOLVED,
+        "iteration_count": 1,
+        "selected_hypothesis": None,
+        "remediation_proposal": None,
+        "execution_result": None,
+        "verification_report": None,
+        "audit_events": ["Alert triggered", "Remediation executed"],
+    }
+    report = create_incident_report(mock_state)  # type: ignore[arg-type]
+    assert "# Incident Postmortem Report" in report.markdown_content

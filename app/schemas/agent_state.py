@@ -12,6 +12,7 @@ class ApprovalStatus(StrEnum):
     APPROVED = "approved"
     REJECTED = "rejected"
     AUTO_APPROVED = "auto_approved"
+    DIAGNOSTICS_REQUESTED = "diagnostics_requested"
 
 
 class RiskTier(StrEnum):
@@ -119,6 +120,30 @@ class LogSignature(BaseModel):
     severity: str = "ERROR"
 
 
+class DeploymentRecord(BaseModel):
+    """Recent deployment record representing a release event."""
+
+    deployment_id: str
+    service: str
+    version: str
+    deployed_at: str
+    deployed_by: str = "CI/CD Pipeline"
+    commit_sha: str = "HEAD"
+    status: str = "SUCCESS"
+
+
+class HistoricalIncident(BaseModel):
+    """Historical incident record retrieved from Qdrant vector memory."""
+
+    incident_id: str
+    service: str
+    symptoms: str
+    root_cause: str
+    remediation: str
+    outcome: str
+    similarity_score: float = 0.0
+
+
 def merge_audit_history(existing: list[str], new_entries: list[str]) -> list[str]:
     """Custom reducer for appending audit events with memory cap."""
     combined = existing + new_entries
@@ -126,10 +151,13 @@ def merge_audit_history(existing: list[str], new_entries: list[str]) -> list[str
 
 
 class InvestigationState(TypedDict):
-    """Production LangGraph investigation state schema.
+    """Enterprise LangGraph investigation state schema conforming to Section 8.
 
-    Uses compact data structures to ensure optimal memory consumption and
-    bounded context sizes during checkpointing and serialization.
+    Tracks:
+    - incident_id, messages, severity, affected_services
+    - log_findings, metrics, deployments, retrieved_incidents
+    - hypotheses, evidence, pending_action, approval_status, executed_actions
+    - retry_count, errors, verification_results, postmortem
     """
 
     incident_id: str
@@ -139,19 +167,30 @@ class InvestigationState(TypedDict):
     status: IncidentStatus
     iteration_count: int
 
-    # Bounded telemetry representations (No raw unbounded arrays!)
+    # Core Section 8 tracking fields
+    messages: list[str]
+    affected_services: list[str]
+    log_findings: list[LogSignature]
+    metrics: TelemetrySummary | None
+    deployments: list[DeploymentRecord]
+    retrieved_incidents: list[HistoricalIncident]
+    hypotheses: list[RCAHypothesis]
+    evidence: list[str]
+    pending_action: RemediationProposal | None
+    approval_status: ApprovalStatus
+    approval_reason: str | None
+    executed_actions: list[RemediationExecutionResult]
+    retry_count: int
+    errors: list[str]
+    verification_results: HealthVerificationReport | None
+
+    # Telemetry and aliases for backward-compatibility
     telemetry: TelemetrySummary | None
     log_signatures: list[LogSignature]
     matched_runbook_ids: list[str]
-
-    # Reasoning and decision outputs
     rca_hypotheses: list[RCAHypothesis]
     selected_hypothesis: RCAHypothesis | None
     remediation_proposal: RemediationProposal | None
-
-    # HITL Approval and Execution
-    approval_status: ApprovalStatus
-    approval_reason: str | None
     execution_result: RemediationExecutionResult | None
     verification_report: HealthVerificationReport | None
     postmortem: PostmortemReport | None

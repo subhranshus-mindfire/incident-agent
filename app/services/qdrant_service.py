@@ -6,7 +6,9 @@ from qdrant_client import AsyncQdrantClient, models
 from qdrant_client.http.exceptions import UnexpectedResponse
 
 from app.config.config import settings
+from app.constants.default_incidents import DEFAULT_HISTORICAL_INCIDENTS
 from app.exceptions.domain import ExternalServiceException
+from app.schemas.agent_state import HistoricalIncident
 from app.schemas.runbook import Runbook, RunbookSearchResult
 from app.services.embedding_service import EmbeddingService, get_embedding_service
 
@@ -27,9 +29,11 @@ class QdrantService:
         self,
         client: AsyncQdrantClient | None = None,
         collection_name: str = settings.QDRANT_COLLECTION,
+        incidents_collection: str = "historical_incidents",
         embedding_service: EmbeddingService | None = None,
     ) -> None:
         self.collection_name = collection_name
+        self.incidents_collection = incidents_collection
         self._embedding_service = embedding_service or get_embedding_service()
         self._external_client = client is not None
         self._client: AsyncQdrantClient = client or AsyncQdrantClient(
@@ -94,6 +98,9 @@ class QdrantService:
                 except UnexpectedResponse:
                     pass  # Index already exists
             logger.info("Payload indexes verified for 'service' and 'incident_types'.")
+
+            # Initialize historical incidents vector collection
+            await self.init_incidents_collection()
         except Exception as exc:
             logger.error(f"Failed to initialize Qdrant collection '{self.collection_name}': {exc}")
             raise ExternalServiceException(
@@ -287,6 +294,149 @@ class QdrantService:
                 service_name="Qdrant",
                 message=f"Failed to list runbooks: {exc}",
             ) from exc
+
+    async def init_incidents_collection(self) -> None:
+        """Ensures the historical incidents vector collection exists and is seeded."""
+        try:
+            exists = await self._client.collection_exists(self.incidents_collection)
+            if not exists:
+                logger.info(f"Creating Qdrant collection '{self.incidents_collection}'...")
+                await self._client.create_collection(
+                    collection_name=self.incidents_collection,
+                    vectors_config=models.VectorParams(
+                        size=self._embedding_service.dimension,
+                        distance=models.Distance.COSINE,
+                    ),
+                )
+                await self.seed_historical_incidents()
+        except Exception as exc:
+            logger.warning(f"Failed to initialize '{self.incidents_collection}': {exc}")
+
+    async def seed_historical_incidents(self) -> int:
+        """Seeds default historical incidents into Qdrant."""
+        points: list[models.PointStruct] = []
+        for inc in DEFAULT_HISTORICAL_INCIDENTS:
+            text = (
+                f"Service: {inc.service} | Symptoms: {inc.symptoms} | "
+                f"Root Cause: {inc.root_cause} | Remediation: {inc.remediation}"
+            )
+            vector = await self._embedding_service.embed_text(text)
+            points.append(
+                models.PointStruct(
+                    id=inc.id,
+                    vector=vector,
+                    payload={
+                        "incident_id": inc.id,
+                        "service": inc.service,
+                        "symptoms": inc.symptoms,
+                        "root_cause": inc.root_cause,
+                        "remediation": inc.remediation,
+                        "outcome": inc.outcome,
+                    },
+                )
+            )
+        if points:
+            await self._client.upsert(collection_name=self.incidents_collection, points=points)
+            logger.info(
+                f"Seeded {len(points)} historical incidents into '{self.incidents_collection}'"
+            )
+        return len(points)
+
+    async def search_historical_incidents(
+        self,
+        query: str,
+        service: str | None = None,
+        limit: int = 3,
+        score_threshold: float = 0.15,
+    ) -> list[HistoricalIncident]:
+        """Semantically searches past incidents matching the query."""
+        if not query.strip():
+            return []
+        try:
+            exists = await self._client.collection_exists(self.incidents_collection)
+            if not exists:
+                await self.init_incidents_collection()
+
+            query_vector = await self._embedding_service.embed_text(query[:4000])
+            search_filter = None
+            if service:
+                search_filter = models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="service",
+                            match=models.MatchValue(value=service),
+                        )
+                    ]
+                )
+
+            search_res = await self._client.query_points(
+                collection_name=self.incidents_collection,
+                query=query_vector,
+                query_filter=search_filter,
+                limit=limit,
+                score_threshold=score_threshold,
+                with_payload=True,
+            )
+
+            results: list[HistoricalIncident] = []
+            for pt in search_res.points:
+                if pt.payload:
+                    results.append(
+                        HistoricalIncident(
+                            incident_id=str(pt.payload.get("incident_id", pt.id)),
+                            service=str(pt.payload.get("service", "unknown")),
+                            symptoms=str(pt.payload.get("symptoms", "")),
+                            root_cause=str(pt.payload.get("root_cause", "")),
+                            remediation=str(pt.payload.get("remediation", "")),
+                            outcome=str(pt.payload.get("outcome", "")),
+                            similarity_score=round(float(pt.score), 4),
+                        )
+                    )
+            return results
+        except Exception as exc:
+            logger.warning(f"Error searching historical incidents in Qdrant: {exc}")
+            return []
+
+    async def persist_resolved_incident(
+        self,
+        incident_id: str,
+        service: str,
+        symptoms: str,
+        root_cause: str,
+        remediation: str,
+        outcome: str = "RESOLVED",
+    ) -> str:
+        """Stores a newly resolved incident summary into Qdrant for future similarity search."""
+        import uuid
+
+        point_id = (
+            incident_id
+            if self.is_valid_uuid(incident_id)
+            else str(uuid.uuid5(uuid.NAMESPACE_DNS, incident_id))
+        )
+        text = (
+            f"Service: {service} | Symptoms: {symptoms} | "
+            f"Root Cause: {root_cause} | Remediation: {remediation}"
+        )
+        vector = await self._embedding_service.embed_text(text)
+
+        point = models.PointStruct(
+            id=point_id,
+            vector=vector,
+            payload={
+                "incident_id": incident_id,
+                "service": service,
+                "symptoms": symptoms,
+                "root_cause": root_cause,
+                "remediation": remediation,
+                "outcome": outcome,
+            },
+        )
+        await self._client.upsert(collection_name=self.incidents_collection, points=[point])
+        logger.info(
+            f"Persisted resolved incident {incident_id} into Qdrant '{self.incidents_collection}'"
+        )
+        return point_id
 
 
 _shared_qdrant_service: QdrantService | None = None
