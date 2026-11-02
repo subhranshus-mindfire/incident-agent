@@ -15,7 +15,9 @@ aiosqlite>=0.20.0
 prometheus-client>=0.20.0
 qdrant-client>=1.8.0
 redis>=5.0.3
+# Database & Migrations
 sqlalchemy[asyncio]>=2.0.28
+alembic>=1.13.1
 greenlet>=3.0.3
 asyncpg>=0.29.0
 

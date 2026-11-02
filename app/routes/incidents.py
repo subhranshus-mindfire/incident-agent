@@ -1,10 +1,11 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.config.database import get_db_session
 from app.services.incident_service import IncidentService
 from app.schemas.incident import IncidentCreate, IncidentResponse, IncidentUpdateStatus
 from app.constants.enums import IncidentStatus, IncidentSeverity
+from app.exceptions.domain import IncidentNotFoundException
 
 router = APIRouter(prefix="/incidents", tags=["Incidents"])
 
@@ -52,10 +53,7 @@ async def get_incident(
     """Retrieve details of a specific incident."""
     incident = await incident_service.get_incident(incident_id)
     if not incident:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Incident with ID '{incident_id}' not found.",
-        )
+        raise IncidentNotFoundException(incident_id)
     return IncidentResponse.model_validate(incident)
 
 
@@ -72,8 +70,5 @@ async def update_incident_status(
         reason=payload.reason,
     )
     if not updated:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Incident with ID '{incident_id}' not found.",
-        )
+        raise IncidentNotFoundException(incident_id)
     return IncidentResponse.model_validate(updated)
