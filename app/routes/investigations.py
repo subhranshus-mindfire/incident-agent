@@ -4,16 +4,22 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config.database import get_db_session
 from app.constants.enums import IncidentSeverity
-from app.services.investigation_service import (
-    InvestigationService,
-    get_investigation_service,
-)
+from app.services.investigation_service import InvestigationService
 
 logger = logging.getLogger("incident_agent.routes.investigations")
 
 router = APIRouter(prefix="/investigations", tags=["Investigations & LangGraph Agent"])
+
+
+def get_investigation_service(
+    session: AsyncSession = Depends(get_db_session),
+) -> InvestigationService:
+    """Dependency provider injecting database session into InvestigationService."""
+    return InvestigationService(session=session)
 
 
 class TriggerInvestigationRequest(BaseModel):

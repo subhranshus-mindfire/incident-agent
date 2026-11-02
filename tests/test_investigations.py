@@ -226,6 +226,13 @@ async def test_investigations_api_endpoints(client: httpx.AsyncClient):
     state_data = get_res.json()
     assert state_data["incident_id"] == incident_id
 
+    # Verify database persistence: Incident was automatically created in DB
+    db_inc_res = await client.get(f"/api/v1/incidents/{incident_id}")
+    assert db_inc_res.status_code == 200
+    inc_record = db_inc_res.json()
+    assert inc_record["id"] == incident_id
+    assert inc_record["service"] == "checkout-service"
+
     # 3. Trigger approval-requiring incident
     db_payload = {
         "service": "postgres",

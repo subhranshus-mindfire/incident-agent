@@ -1,12 +1,25 @@
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.graph import get_investigation_graph
-from app.constants.enums import IncidentSeverity, IncidentStatus
+from app.constants.enums import (
+    AuditAction,
+    EvidenceType,
+    IncidentSeverity,
+    IncidentStatus,
+    InvestigationStatus,
+)
 from app.exceptions.domain import EntityNotFoundException, InvalidStateTransitionException
+from app.models.incident import Incident
+from app.models.investigation import Investigation
+from app.repository.audit_repo import AuditLogRepository
+from app.repository.incident_repo import IncidentRepository
+from app.repository.investigation_repo import InvestigationRepository
 from app.schemas.agent_state import (
     ApprovalStatus,
     InvestigationState,
@@ -16,13 +29,29 @@ logger = logging.getLogger("incident_agent.investigation_service")
 
 
 class InvestigationService:
-    """Service orchestrating incident investigations via the LangGraph state machine."""
+    """Service orchestrating incident investigations via the LangGraph state machine.
 
-    def __init__(self, graph: CompiledStateGraph[Any, Any, Any, Any] | None = None) -> None:
+    Supports optional PostgreSQL persistence and audit logging when an AsyncSession is provided,
+    while remaining completely decoupled for hermetic unit testing.
+    """
+
+    def __init__(
+        self,
+        graph: CompiledStateGraph[Any, Any, Any, Any] | None = None,
+        session: AsyncSession | None = None,
+    ) -> None:
         self.graph = graph or get_investigation_graph()
+        self.session = session
+        self.incident_repo = IncidentRepository(session) if session else None
+        self.investigation_repo = InvestigationRepository(session) if session else None
+        self.audit_repo = AuditLogRepository(session) if session else None
 
     def _get_config(self, incident_id: str) -> RunnableConfig:
-        return RunnableConfig(configurable={"thread_id": incident_id})
+        """Returns LangGraph execution configuration with thread isolation and recursion limits."""
+        return RunnableConfig(
+            configurable={"thread_id": incident_id},
+            recursion_limit=25,
+        )
 
     async def start_investigation(
         self,
@@ -63,6 +92,16 @@ class InvestigationService:
         # Inspect if graph paused for human approval
         graph_state = await self.graph.aget_state(config)
         is_awaiting_approval = "await_approval" in graph_state.next
+
+        # Synchronize with PostgreSQL database if session provided
+        await self._sync_start_to_db(
+            incident_id=incident_id,
+            service=service,
+            symptoms=symptoms,
+            severity=severity,
+            state=result,
+            is_awaiting_approval=is_awaiting_approval,
+        )
 
         return {
             "incident_id": incident_id,
@@ -132,12 +171,179 @@ class InvestigationService:
         result = await self.graph.ainvoke(None, config=config)
 
         resumed_state = await self.graph.aget_state(config)
+
+        # Synchronize decision and final state to PostgreSQL
+        await self._sync_approval_to_db(
+            incident_id=incident_id,
+            approved=approved,
+            reason=decision_reason,
+            state=result,
+        )
+
         return {
             "incident_id": incident_id,
             "state": result,
             "completed": len(resumed_state.next) == 0,
             "next_steps": list(resumed_state.next),
         }
+
+    async def _sync_start_to_db(
+        self,
+        incident_id: str,
+        service: str,
+        symptoms: str,
+        severity: IncidentSeverity,
+        state: dict[str, Any],
+        is_awaiting_approval: bool,
+    ) -> None:
+        """Mirror investigation progress and artifacts to PostgreSQL database."""
+        if not self.session or not self.incident_repo or not self.investigation_repo:
+            return
+
+        try:
+            # 1. Ensure Incident exists
+            incident = await self.incident_repo.get_by_id(incident_id)
+            if not incident:
+                incident = Incident(
+                    id=incident_id,
+                    title=f"Incident on {service}: {symptoms[:80]}",
+                    service=service,
+                    severity=severity,
+                    status=IncidentStatus.MITIGATING
+                    if is_awaiting_approval
+                    else IncidentStatus.INVESTIGATING,
+                    description=symptoms,
+                )
+                await self.incident_repo.create(incident)
+            else:
+                new_status = (
+                    IncidentStatus.MITIGATING
+                    if is_awaiting_approval
+                    else IncidentStatus.INVESTIGATING
+                )
+                incident.status = new_status
+
+            # 2. Create Investigation
+            inv_status = (
+                InvestigationStatus.AWAITING_APPROVAL
+                if is_awaiting_approval
+                else InvestigationStatus.COMPLETED
+            )
+            top_hypo = state.get("selected_hypothesis")
+            investigation = Investigation(
+                incident_id=incident_id,
+                status=inv_status,
+                root_cause_summary=top_hypo.root_cause if top_hypo else None,
+                confidence_score=top_hypo.confidence_score if top_hypo else None,
+            )
+            await self.investigation_repo.create(investigation)
+
+            # 3. Add Evidences
+            telemetry = state.get("telemetry")
+            if telemetry:
+                await self.investigation_repo.add_evidence(
+                    investigation_id=investigation.id,
+                    evidence_type=EvidenceType.METRIC,
+                    source="Prometheus",
+                    summary="Golden Signal telemetry snapshot",
+                    payload=telemetry.model_dump(mode="json")
+                    if hasattr(telemetry, "model_dump")
+                    else dict(telemetry),
+                )
+
+            logs = state.get("log_signatures", [])
+            if logs:
+                await self.investigation_repo.add_evidence(
+                    investigation_id=investigation.id,
+                    evidence_type=EvidenceType.LOG,
+                    source="Loki",
+                    summary="Top error log signatures",
+                    payload={
+                        "signatures": [
+                            sig.model_dump(mode="json")
+                            if hasattr(sig, "model_dump")
+                            else dict(sig)
+                            for sig in logs
+                        ]
+                    },
+                )
+
+            runbook_ids = state.get("matched_runbook_ids", [])
+            if runbook_ids:
+                await self.investigation_repo.add_evidence(
+                    investigation_id=investigation.id,
+                    evidence_type=EvidenceType.RUNBOOK,
+                    source="Qdrant",
+                    summary="Relevant operational runbooks",
+                    payload={"runbook_ids": runbook_ids},
+                )
+
+            # 4. Add proposed remediation if present
+            proposal = state.get("remediation_proposal")
+            if proposal:
+                await self.investigation_repo.add_remediation_action(
+                    investigation_id=investigation.id,
+                    action_type=proposal.action_type.value,
+                    description=proposal.blast_radius,
+                    blast_radius=proposal.risk_tier.value,
+                    approval_required=proposal.requires_approval,
+                    execution_payload=proposal.parameters,
+                )
+
+            # 5. Audit Log
+            if self.audit_repo:
+                await self.audit_repo.log(
+                    entity_type="investigation",
+                    entity_id=investigation.id,
+                    action=AuditAction.CREATED,
+                    actor="agent",
+                    details={"service": service, "status": inv_status.value},
+                )
+
+            await self.session.commit()
+        except Exception as exc:
+            logger.warning(f"Database synchronization failed for incident {incident_id}: {exc}")
+            await self.session.rollback()
+
+    async def _sync_approval_to_db(
+        self,
+        incident_id: str,
+        approved: bool,
+        reason: str,
+        state: dict[str, Any],
+    ) -> None:
+        """Update DB models upon human decision."""
+        if not self.session or not self.investigation_repo:
+            return
+
+        try:
+            investigation = await self.investigation_repo.get_latest_for_incident(incident_id)
+            if investigation:
+                investigation.status = InvestigationStatus.COMPLETED
+
+                if self.audit_repo:
+                    await self.audit_repo.log(
+                        entity_type="investigation",
+                        entity_id=investigation.id,
+                        action=AuditAction.APPROVED if approved else AuditAction.REJECTED,
+                        actor="sre",
+                        details={"reason": reason},
+                    )
+
+            if self.incident_repo:
+                new_status = IncidentStatus.RESOLVED if approved else IncidentStatus.INVESTIGATING
+                incident = await self.incident_repo.get_by_id(incident_id)
+                if incident:
+                    incident.status = new_status
+                    if approved:
+                        incident.resolved_at = datetime.now(UTC)
+
+            await self.session.commit()
+        except Exception as exc:
+            logger.warning(
+                f"Database synchronization on approval failed for incident {incident_id}: {exc}"
+            )
+            await self.session.rollback()
 
 
 _default_investigation_service: InvestigationService | None = None
