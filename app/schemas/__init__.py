@@ -1,3 +1,16 @@
+from app.schemas.agent_state import (
+    ApprovalStatus,
+    HealthVerificationReport,
+    InvestigationState,
+    LogSignature,
+    PostmortemReport,
+    RCAHypothesis,
+    RemediationActionType,
+    RemediationExecutionResult,
+    RemediationProposal,
+    RiskTier,
+    TelemetrySummary,
+)
 from app.schemas.incident import (
     IncidentBase,
     IncidentCreate,
@@ -25,6 +38,17 @@ from app.schemas.telemetry import (
 )
 
 __all__ = [
+    "ApprovalStatus",
+    "RiskTier",
+    "RemediationActionType",
+    "RCAHypothesis",
+    "RemediationProposal",
+    "RemediationExecutionResult",
+    "HealthVerificationReport",
+    "PostmortemReport",
+    "TelemetrySummary",
+    "LogSignature",
+    "InvestigationState",
     "IncidentBase",
     "IncidentCreate",
     "IncidentUpdateStatus",
