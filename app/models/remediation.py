@@ -1,8 +1,11 @@
-from datetime import datetime
 import uuid
-from typing import Optional, Dict, Any, TYPE_CHECKING
-from sqlalchemy import String, Text, Boolean, DateTime, ForeignKey, JSON, Enum as SQLEnum, func
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
+
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from app.config.database import Base
 from app.constants.enums import RemediationStatus
 
@@ -34,18 +37,20 @@ class RemediationAction(Base):
         index=True,
     )
     approval_required: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    approved_by: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    execution_payload: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
-    execution_result: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    execution_payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    execution_result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
     )
-    executed_at: Mapped[Optional[datetime]] = mapped_column(
+    executed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
     )
 
     # Relationships
-    investigation: Mapped["Investigation"] = relationship("Investigation", back_populates="remediations")
+    investigation: Mapped["Investigation"] = relationship(
+        "Investigation", back_populates="remediations"
+    )

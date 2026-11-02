@@ -1,23 +1,27 @@
 import logging
-import asyncio
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from alembic.config import Config
+from typing import Any
+
 from alembic import command
+from alembic.config import Config
+from fastapi import FastAPI
+
 from app.config.config import settings
 from app.config.database import close_db
 
 logger = logging.getLogger("incident_agent")
 
 
-def run_upgrade(connection, cfg):
+def run_upgrade(connection: Any, cfg: Config) -> None:
     cfg.attributes["connection"] = connection
     command.upgrade(cfg, "head")
 
 
-async def run_db_migrations():
+async def run_db_migrations() -> None:
     """Applies pending Alembic database migrations programmatically on startup."""
     from app.config.database import engine
+
     logger.info("Applying database migrations via Alembic...")
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
@@ -28,7 +32,7 @@ async def run_db_migrations():
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     Application lifespan manager.
     Handles startup events (DB migrations, connection pools)

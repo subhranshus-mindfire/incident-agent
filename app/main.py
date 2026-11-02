@@ -1,22 +1,23 @@
 import logging
+
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+
 from app.config import settings
-from app.health import router as health_router
-from app.routes import api_router
-from app.starter import lifespan
 from app.exceptions import (
     AppException,
     app_exception_handler,
-    validation_exception_handler,
     generic_exception_handler,
+    validation_exception_handler,
 )
+from app.health import router as health_router
+from app.routes import api_router
+from app.starter import lifespan
 
 # Configure basic logging
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger("incident_agent")
 
@@ -49,7 +50,7 @@ def create_application() -> FastAPI:
     application.include_router(api_router, prefix=settings.API_V1_PREFIX)
 
     @application.get("/", tags=["Root"])
-    async def root():
+    async def root() -> dict[str, str]:
         return {
             "name": settings.APP_NAME,
             "version": settings.APP_VERSION,
@@ -65,4 +66,5 @@ app = create_application()
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("app.main:app", host=settings.HOST, port=settings.PORT, reload=settings.DEBUG)

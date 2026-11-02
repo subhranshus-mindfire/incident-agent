@@ -1,9 +1,11 @@
-from typing import List, Dict, Any, Optional
+from typing import Any
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.repository.base import BaseRepository
-from app.models.audit_log import AuditLog
+
 from app.constants.enums import AuditAction
+from app.models.audit_log import AuditLog
+from app.repository.base import BaseRepository
 
 
 class AuditLogRepository(BaseRepository[AuditLog]):
@@ -18,7 +20,7 @@ class AuditLogRepository(BaseRepository[AuditLog]):
         entity_id: str,
         action: AuditAction,
         actor: str = "system",
-        details: Optional[Dict[str, Any]] = None,
+        details: dict[str, Any] | None = None,
     ) -> AuditLog:
         """Create an immutable audit entry."""
         audit_entry = AuditLog(
@@ -38,7 +40,7 @@ class AuditLogRepository(BaseRepository[AuditLog]):
         entity_type: str,
         entity_id: str,
         limit: int = 50,
-    ) -> List[AuditLog]:
+    ) -> list[AuditLog]:
         """Retrieve audit history for a specific entity."""
         query = (
             select(AuditLog)

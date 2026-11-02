@@ -1,18 +1,19 @@
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.repository.incident_repo import IncidentRepository
-from app.repository.investigation_repo import InvestigationRepository
-from app.repository.audit_repo import AuditLogRepository
-from app.models.incident import Incident
-from app.models.investigation import Investigation
+
 from app.constants.enums import (
+    AuditAction,
+    EvidenceType,
     IncidentSeverity,
     IncidentStatus,
     InvestigationStatus,
-    EvidenceType,
     RemediationStatus,
-    AuditAction,
 )
+from app.models.incident import Incident
+from app.models.investigation import Investigation
+from app.repository.audit_repo import AuditLogRepository
+from app.repository.incident_repo import IncidentRepository
+from app.repository.investigation_repo import InvestigationRepository
 
 
 @pytest.mark.asyncio
@@ -38,7 +39,9 @@ async def test_incident_repository_crud(db_session: AsyncSession):
     assert fetched.service == "payment-gateway"
 
     # List with filters
-    results = await repo.list_by_filter(service="payment-gateway", severity=IncidentSeverity.CRITICAL)
+    results = await repo.list_by_filter(
+        service="payment-gateway", severity=IncidentSeverity.CRITICAL
+    )
     assert len(results) == 1
     assert results[0].id == created.id
 

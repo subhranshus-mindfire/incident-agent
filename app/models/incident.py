@@ -1,8 +1,11 @@
-from datetime import datetime, timezone
 import uuid
-from typing import Optional, List, Dict, Any, TYPE_CHECKING
-from sqlalchemy import String, Text, DateTime, JSON, Enum as SQLEnum, func
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
+
+from sqlalchemy import JSON, DateTime, String, Text, func
+from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from app.config.database import Base
 from app.constants.enums import IncidentSeverity, IncidentStatus
 
@@ -32,7 +35,7 @@ class Incident(Base):
         nullable=False,
         index=True,
     )
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -44,14 +47,14 @@ class Incident(Base):
         onupdate=func.now(),
         nullable=False,
     )
-    resolved_at: Mapped[Optional[datetime]] = mapped_column(
+    resolved_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
     )
-    extra_metadata: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    extra_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
 
     # Relationships
-    investigations: Mapped[List["Investigation"]] = relationship(
+    investigations: Mapped[list["Investigation"]] = relationship(
         "Investigation",
         back_populates="incident",
         cascade="all, delete-orphan",

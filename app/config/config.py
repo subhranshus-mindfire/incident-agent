@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import List
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
 
     # CORS
-    ALLOWED_ORIGINS: List[str] = ["*"]
+    ALLOWED_ORIGINS: list[str] = ["*"]
 
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/incident_db"
@@ -30,11 +30,7 @@ class Settings(BaseSettings):
     PROMETHEUS_URL: str = "http://localhost:9090"
     LOKI_URL: str = "http://localhost:3100"
 
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore"
-    )
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 
 @lru_cache

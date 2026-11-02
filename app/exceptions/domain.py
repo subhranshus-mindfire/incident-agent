@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Any
+from typing import Any
 
 
 class AppException(Exception):
@@ -9,7 +9,7 @@ class AppException(Exception):
         message: str,
         status_code: int = 500,
         error_code: str = "INTERNAL_ERROR",
-        details: Optional[Dict[str, Any]] = None,
+        details: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message

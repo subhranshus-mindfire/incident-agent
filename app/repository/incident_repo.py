@@ -1,10 +1,10 @@
-from typing import Optional, List
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.repository.base import BaseRepository
-from app.models.incident import Incident
+from sqlalchemy.orm import selectinload
+
 from app.constants.enums import IncidentSeverity, IncidentStatus
+from app.models.incident import Incident
+from app.repository.base import BaseRepository
 
 
 class IncidentRepository(BaseRepository[Incident]):
@@ -13,7 +13,7 @@ class IncidentRepository(BaseRepository[Incident]):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(Incident, session)
 
-    async def get_with_relations(self, incident_id: str) -> Optional[Incident]:
+    async def get_with_relations(self, incident_id: str) -> Incident | None:
         """Fetch an incident by ID along with its associated investigations and details."""
         query = (
             select(Incident)
@@ -25,12 +25,12 @@ class IncidentRepository(BaseRepository[Incident]):
 
     async def list_by_filter(
         self,
-        service: Optional[str] = None,
-        severity: Optional[IncidentSeverity] = None,
-        status: Optional[IncidentStatus] = None,
+        service: str | None = None,
+        severity: IncidentSeverity | None = None,
+        status: IncidentStatus | None = None,
         skip: int = 0,
         limit: int = 50,
-    ) -> List[Incident]:
+    ) -> list[Incident]:
         """Fetch filtered and paginated list of incidents."""
         query = select(Incident)
 
@@ -45,7 +45,7 @@ class IncidentRepository(BaseRepository[Incident]):
         result = await self.session.execute(query)
         return list(result.scalars().all())
 
-    async def update_status(self, incident_id: str, new_status: IncidentStatus) -> Optional[Incident]:
+    async def update_status(self, incident_id: str, new_status: IncidentStatus) -> Incident | None:
         """Update the operational status of an incident."""
         incident = await self.get_by_id(incident_id)
         if not incident:

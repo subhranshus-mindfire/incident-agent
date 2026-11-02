@@ -1,12 +1,16 @@
 FROM python:3.12-slim
 
+# Copy ultra-fast uv package manager binary
+COPY --from=ghcr.io/astral-sh/uv:0.4.18 /uv /uvx /bin/
+
 # Set working directory
 WORKDIR /workspace
 
 # Environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/workspace
+    PYTHONPATH=/workspace \
+    UV_SYSTEM_PYTHON=1
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -14,16 +18,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install python dependencies
+# Install python dependencies using uv (10x faster than standard pip)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN uv pip install --system --no-cache -r requirements.txt
 
-# Create non-root user and set permissions
+# Create non-root system user for security
 RUN groupadd -g 10001 appgroup && \
     useradd -u 10001 -g appgroup -s /bin/bash -m appuser && \
     chown -R appuser:appgroup /workspace
 
-# Copy source code and tests with correct ownership
+# Copy source code and tests with non-root ownership
 COPY --chown=appuser:appgroup . /workspace
 
 # Switch to non-root user

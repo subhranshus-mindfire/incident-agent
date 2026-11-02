@@ -78,7 +78,9 @@ services:
     volumes:
       - ./app:/workspace/app
       - ./tests:/workspace/tests
+      - ./pyproject.toml:/workspace/pyproject.toml
       - ./migrations:/workspace/migrations
+      - ./pyproject.toml:/workspace/pyproject.toml
     networks:
       - incident-network
 
@@ -95,6 +97,7 @@ services:
     volumes:
       - ./app:/workspace/app
       - ./tests:/workspace/tests
+      - ./pyproject.toml:/workspace/pyproject.toml
     command: ["pytest", "-v", "tests/"]
     networks:
       - incident-network

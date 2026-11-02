@@ -1,10 +1,11 @@
 import logging
-from typing import Optional, List, Dict, Any
+
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.repository.incident_repo import IncidentRepository
-from app.repository.audit_repo import AuditLogRepository
+
+from app.constants.enums import AuditAction, IncidentSeverity, IncidentStatus
 from app.models.incident import Incident
-from app.constants.enums import IncidentSeverity, IncidentStatus, AuditAction
+from app.repository.audit_repo import AuditLogRepository
+from app.repository.incident_repo import IncidentRepository
 from app.schemas.incident import IncidentCreate
 
 logger = logging.getLogger("incident_agent.incident_service")
@@ -45,18 +46,18 @@ class IncidentService:
         logger.info("Incident created successfully with ID: %s", created_incident.id)
         return created_incident
 
-    async def get_incident(self, incident_id: str) -> Optional[Incident]:
+    async def get_incident(self, incident_id: str) -> Incident | None:
         """Fetch incident by ID."""
         return await self.incident_repo.get_with_relations(incident_id)
 
     async def list_incidents(
         self,
-        service: Optional[str] = None,
-        severity: Optional[str] = None,
-        status: Optional[str] = None,
+        service: str | None = None,
+        severity: str | None = None,
+        status: str | None = None,
         skip: int = 0,
         limit: int = 50,
-    ) -> List[Incident]:
+    ) -> list[Incident]:
         """Retrieve paginated incidents with optional filters."""
         sev_enum = IncidentSeverity(severity) if severity else None
         stat_enum = IncidentStatus(status) if status else None
@@ -73,8 +74,8 @@ class IncidentService:
         incident_id: str,
         new_status: IncidentStatus,
         actor: str = "system",
-        reason: Optional[str] = None,
-    ) -> Optional[Incident]:
+        reason: str | None = None,
+    ) -> Incident | None:
         """Update incident status and log the change."""
         updated = await self.incident_repo.update_status(incident_id, new_status)
         if updated:
