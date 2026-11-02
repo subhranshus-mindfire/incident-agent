@@ -1,11 +1,13 @@
 import asyncio
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 
 from app.config.config import settings
+from app.core.http_client import get_shared_http_client
 from app.exceptions.domain import ExternalServiceException
 from app.schemas.telemetry import (
     AnomalyAlert,
@@ -16,6 +18,9 @@ from app.schemas.telemetry import (
 )
 
 logger = logging.getLogger("incident_agent.prometheus_service")
+
+# Strict identifier validation for PromQL label injection defense
+SERVICE_IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z0-9_\-\.]+$")
 
 
 class PrometheusService:
@@ -31,34 +36,41 @@ class PrometheusService:
         self.base_url = (base_url or settings.PROMETHEUS_URL).rstrip("/")
         self.timeout = httpx.Timeout(timeout_seconds, connect=4.0)
         self.max_retries = max_retries
-        self._external_client = client
-        self._client: httpx.AsyncClient | None = client
+        self._custom_client = client
 
-    async def _get_client(self) -> httpx.AsyncClient:
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(
-                base_url=self.base_url,
-                timeout=self.timeout,
-                limits=httpx.Limits(max_keepalive_connections=20, max_connections=50),
-            )
-        return self._client
+    def _get_client(self) -> httpx.AsyncClient:
+        """Returns the shared connection pool client or custom test client."""
+        if self._custom_client is not None and not self._custom_client.is_closed:
+            return self._custom_client
+        return get_shared_http_client()
 
     async def close(self) -> None:
-        if self._client is not None and self._external_client is None:
-            await self._client.aclose()
-            self._client = None
+        """Closes custom client if owned locally."""
+        if self._custom_client is not None and not self._custom_client.is_closed:
+            await self._custom_client.aclose()
+            self._custom_client = None
+
+    def _validate_service(self, service: str) -> str:
+        """Validates and sanitizes service identifier to prevent PromQL label injection."""
+        sanitized = service.strip()
+        if not SERVICE_IDENTIFIER_PATTERN.match(sanitized):
+            raise ValueError(
+                f"Invalid service identifier '{sanitized}'. Only alphanumeric, hyphen, dot, and underscore characters are allowed."
+            )
+        return sanitized
 
     async def _execute_with_retry(
         self,
         endpoint: str,
         params: dict[str, Any],
     ) -> dict[str, Any]:
-        client = await self._get_client()
+        client = self._get_client()
+        url = f"{self.base_url}{endpoint}"
         last_error: Exception | None = None
 
         for attempt in range(1, self.max_retries + 1):
             try:
-                response = await client.get(endpoint, params=params)
+                response = await client.get(url, params=params, timeout=self.timeout)
                 if response.status_code == 200:
                     data = response.json()
                     if data.get("status") == "success":
@@ -192,19 +204,20 @@ class PrometheusService:
         window_minutes: int = 15,
     ) -> GoldenSignalMetrics:
         """Computes Google SRE Golden Signals for a given service."""
+        safe_service = self._validate_service(service)
         window = f"{window_minutes}m"
 
-        # Queries for Golden Signals
+        # Injection-safe PromQL queries for Golden Signals
         err_query = (
-            f'sum(rate(http_requests_total{{service="{service}",status=~"5.."}}[{window}])) '
-            f'/ (sum(rate(http_requests_total{{service="{service}"}}[{window}])) + 0.0001) * 100'
+            f'sum(rate(http_requests_total{{service="{safe_service}",status=~"5.."}}[{window}])) '
+            f'/ (sum(rate(http_requests_total{{service="{safe_service}"}}[{window}])) + 0.0001) * 100'
         )
-        rate_query = f'sum(rate(http_requests_total{{service="{service}"}}[{window}]))'
-        lat_query = f'histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{{service="{service}"}}[{window}])) by (le)) * 1000'
-        cpu_query = f'avg(rate(container_cpu_usage_seconds_total{{container="{service}",container!=""}}[{window}])) * 100'
+        rate_query = f'sum(rate(http_requests_total{{service="{safe_service}"}}[{window}]))'
+        lat_query = f'histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{{service="{safe_service}"}}[{window}])) by (le)) * 1000'
+        cpu_query = f'avg(rate(container_cpu_usage_seconds_total{{container="{safe_service}",container!=""}}[{window}])) * 100'
         mem_query = (
-            f'sum(container_memory_working_set_bytes{{container="{service}"}}) '
-            f'/ (sum(container_spec_memory_limit_bytes{{container="{service}"}}) + 1) * 100'
+            f'sum(container_memory_working_set_bytes{{container="{safe_service}"}}) '
+            f'/ (sum(container_spec_memory_limit_bytes{{container="{safe_service}"}}) + 1) * 100'
         )
 
         error_rate, req_rate, p95_lat, cpu_pct, mem_pct = await asyncio.gather(
@@ -216,7 +229,7 @@ class PrometheusService:
         )
 
         return GoldenSignalMetrics(
-            service=service,
+            service=safe_service,
             error_rate_5xx_percent=round(max(0.0, error_rate), 2),
             request_rate_per_sec=round(max(0.0, req_rate), 2),
             p95_latency_ms=round(max(0.0, p95_lat), 2),
@@ -299,8 +312,8 @@ class PrometheusService:
     async def health_check(self) -> bool:
         """Returns True if the Prometheus server is reachable and healthy."""
         try:
-            client = await self._get_client()
-            res = await client.get("/-/healthy")
+            client = self._get_client()
+            res = await client.get(f"{self.base_url}/-/healthy", timeout=3.0)
             return res.status_code == 200
         except Exception:
             return False

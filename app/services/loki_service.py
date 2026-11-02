@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from app.config.config import settings
+from app.core.http_client import get_shared_http_client
 from app.exceptions.domain import ExternalServiceException
 from app.schemas.telemetry import (
     LogEntry,
@@ -16,6 +17,9 @@ from app.schemas.telemetry import (
 )
 
 logger = logging.getLogger("incident_agent.loki_service")
+
+# Strict identifier validation for LogQL label injection defense
+SERVICE_IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z0-9_\-\.]+$")
 
 
 class LokiService:
@@ -57,22 +61,28 @@ class LokiService:
         self.timeout = httpx.Timeout(timeout_seconds, connect=4.0)
         self.max_retries = max_retries
         self.max_line_length = max_line_length
-        self._external_client = client
-        self._client: httpx.AsyncClient | None = client
+        self._custom_client = client
 
-    async def _get_client(self) -> httpx.AsyncClient:
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(
-                base_url=self.base_url,
-                timeout=self.timeout,
-                limits=httpx.Limits(max_keepalive_connections=20, max_connections=50),
-            )
-        return self._client
+    def _get_client(self) -> httpx.AsyncClient:
+        """Returns the shared connection pool client or custom test client."""
+        if self._custom_client is not None and not self._custom_client.is_closed:
+            return self._custom_client
+        return get_shared_http_client()
 
     async def close(self) -> None:
-        if self._client is not None and self._external_client is None:
-            await self._client.aclose()
-            self._client = None
+        """Closes custom client if owned locally."""
+        if self._custom_client is not None and not self._custom_client.is_closed:
+            await self._custom_client.aclose()
+            self._custom_client = None
+
+    def _validate_service(self, service: str) -> str:
+        """Validates and sanitizes service identifier to prevent LogQL label injection."""
+        sanitized = service.strip()
+        if not SERVICE_IDENTIFIER_PATTERN.match(sanitized):
+            raise ValueError(
+                f"Invalid service identifier '{sanitized}'. Only alphanumeric, hyphen, dot, and underscore characters are allowed."
+            )
+        return sanitized
 
     def redact_secrets(self, text: str) -> str:
         """Applies regex scrubbers to redact sensitive tokens, keys, and PII."""
@@ -82,7 +92,7 @@ class LokiService:
         return redacted
 
     def _truncate_line(self, line: str) -> str:
-        """Truncates long log messages to fit within token budgets."""
+        """Truncates long log messages to fit within token budgets and avoid ReDoS."""
         if len(line) > self.max_line_length:
             return line[: self.max_line_length] + " ... [TRUNCATED]"
         return line
@@ -129,12 +139,13 @@ class LokiService:
         endpoint: str,
         params: dict[str, Any],
     ) -> dict[str, Any]:
-        client = await self._get_client()
+        client = self._get_client()
+        url = f"{self.base_url}{endpoint}"
         last_error: Exception | None = None
 
         for attempt in range(1, self.max_retries + 1):
             try:
-                response = await client.get(endpoint, params=params)
+                response = await client.get(url, params=params, timeout=self.timeout)
                 if response.status_code == 200:
                     data = response.json()
                     if data.get("status") == "success":
@@ -205,26 +216,25 @@ class LokiService:
 
             for val in values:
                 try:
-                    # Nano timestamp string -> datetime
                     nano_ts = int(val[0])
                     ts = datetime.fromtimestamp(nano_ts / 1e9, tz=UTC)
                     raw_line = val[1]
                 except (ValueError, IndexError):
                     continue
 
-                # 1. Redact Secrets & PII
-                safe_line = self.redact_secrets(raw_line)
+                # 1. Truncate FIRST to bound memory and prevent ReDoS on massive log payloads
+                bounded_line = self._truncate_line(raw_line)
 
-                # 2. Truncate for token budget
-                bounded_line = self._truncate_line(safe_line)
+                # 2. Redact Secrets & PII on the bounded slice
+                safe_line = self.redact_secrets(bounded_line)
 
                 # 3. Detect Log Level
-                level = self._detect_log_level(bounded_line)
+                level = self._detect_log_level(safe_line)
 
                 entries.append(
                     LogEntry(
                         timestamp=ts,
-                        line=bounded_line,
+                        line=safe_line,
                         level=level,
                         labels=stream_labels,
                     )
@@ -255,10 +265,13 @@ class LokiService:
         max_entries: int = 50,
     ) -> list[LogEntry]:
         """Fetches and deduplicates critical application error logs for a service."""
+        safe_service = self._validate_service(service)
         end = datetime.now(UTC)
         start = datetime.fromtimestamp(end.timestamp() - (window_minutes * 60), tz=UTC)
 
-        logql = f'{{service="{service}"}} |= "error" or |= "exception" or |= "fatal" or |= "panic"'
+        logql = (
+            f'{{service="{safe_service}"}} |= "error" or |= "exception" or |= "fatal" or |= "panic"'
+        )
         try:
             result = await self.query_range(
                 logql=logql, start=start, end=end, limit=max_entries * 2
@@ -274,8 +287,8 @@ class LokiService:
     async def health_check(self) -> bool:
         """Returns True if the Loki server is reachable and ready."""
         try:
-            client = await self._get_client()
-            res = await client.get("/ready")
+            client = self._get_client()
+            res = await client.get(f"{self.base_url}/ready", timeout=3.0)
             return res.status_code == 200
         except Exception:
             return False

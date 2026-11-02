@@ -287,3 +287,22 @@ async def test_telemetry_api_routes(client: httpx.AsyncClient):
     assert "prometheus" in data
     assert "loki" in data
     assert "timestamp" in data
+
+
+def test_service_name_injection_prevention():
+    prom = PrometheusService()
+    loki = LokiService()
+
+    # Valid service names
+    assert prom._validate_service("payment-service") == "payment-service"
+    assert loki._validate_service("auth_svc.v1") == "auth_svc.v1"
+
+    # Malicious injection attempts
+    with pytest.raises(ValueError, match="Invalid service identifier"):
+        prom._validate_service('payment"} or 1==1 #')
+
+    with pytest.raises(ValueError, match="Invalid service identifier"):
+        loki._validate_service('svc"; rm -rf /')
+
+    with pytest.raises(ValueError, match="Invalid service identifier"):
+        prom._validate_service("")

@@ -9,6 +9,7 @@ from fastapi import FastAPI
 
 from app.config.config import settings
 from app.config.database import close_db
+from app.core.http_client import close_shared_http_client, get_shared_http_client
 
 logger = logging.getLogger("incident_agent")
 
@@ -41,6 +42,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Initializing %s v%s...", settings.APP_NAME, settings.APP_VERSION)
     logger.info("Environment: %s", settings.ENVIRONMENT)
 
+    # Initialize shared connection pool
+    get_shared_http_client()
+
     try:
         await run_db_migrations()
     except Exception as ex:
@@ -50,6 +54,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
     logger.info("Shutting down %s...", settings.APP_NAME)
+    await close_shared_http_client()
     try:
         await close_db()
     except Exception as ex:
