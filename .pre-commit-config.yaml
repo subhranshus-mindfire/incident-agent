@@ -1,5 +1,3 @@
-# See https://pre-commit.com for more information
-# See https://pre-commit.com/hooks.html for more hooks
 default_language_version:
   python: python3.12
 
@@ -18,6 +16,12 @@ repos:
       - id: check-ast
       - id: debug-statements
 
+  # Automated secret scanning to prevent leaking tokens/keys
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.2
+    hooks:
+      - id: gitleaks
+
   # Fast Python linting and code formatting using Ruff
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.4.4
@@ -25,6 +29,17 @@ repos:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
       - id: ruff-format
+
+  # Strict static type checking
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.10.0
+    hooks:
+      - id: mypy
+        additional_dependencies:
+          - pydantic>=2.6.0
+          - sqlalchemy>=2.0.28
+          - types-redis
+        args: [--config-file=pyproject.toml]
 
   # Enforce Conventional Commit messages (e.g. feat: ..., fix: ..., docs: ...)
   - repo: https://github.com/compilerla/conventional-pre-commit

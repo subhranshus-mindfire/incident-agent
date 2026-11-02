@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+
 from app.routes.incidents import router as incidents_router
 
 api_router = APIRouter()

@@ -16,7 +16,7 @@ async def test_create_and_fetch_incident_lifecycle(client: AsyncClient):
         "service": "payment-service",
         "severity": "critical",
         "description": "504 Gateway Timeout spike following deployment v2.1.0",
-        "extra_metadata": {"cluster": "prod-us-east-1"}
+        "extra_metadata": {"cluster": "prod-us-east-1"},
     }
     # Create
     create_res = await client.post("/api/v1/incidents", json=payload)
@@ -38,7 +38,7 @@ async def test_create_and_fetch_incident_lifecycle(client: AsyncClient):
     # Update Status
     patch_res = await client.patch(
         f"/api/v1/incidents/{incident_id}/status",
-        json={"status": "investigating", "reason": "Automated triage started"}
+        json={"status": "investigating", "reason": "Automated triage started"},
     )
     assert patch_res.status_code == 200
     updated_data = patch_res.json()

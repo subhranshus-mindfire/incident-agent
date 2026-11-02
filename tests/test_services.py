@@ -1,9 +1,10 @@
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.services.incident_service import IncidentService
-from app.schemas.incident import IncidentCreate
-from app.constants.enums import IncidentSeverity, IncidentStatus, AuditAction
+
+from app.constants.enums import AuditAction, IncidentSeverity, IncidentStatus
 from app.repository.audit_repo import AuditLogRepository
+from app.schemas.incident import IncidentCreate
+from app.services.incident_service import IncidentService
 
 
 @pytest.mark.asyncio

@@ -1,10 +1,10 @@
 from app.constants.enums import (
+    AuditAction,
+    EvidenceType,
     IncidentSeverity,
     IncidentStatus,
     InvestigationStatus,
-    EvidenceType,
     RemediationStatus,
-    AuditAction,
 )
 
 __all__ = [

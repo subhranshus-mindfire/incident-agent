@@ -1,5 +1,6 @@
 import logging
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
+
 from sqlalchemy.ext.asyncio import (
     AsyncAttrs,
     AsyncSession,
@@ -7,6 +8,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
+
 from app.config.config import settings
 
 logger = logging.getLogger("incident_agent.database")
@@ -14,6 +16,7 @@ logger = logging.getLogger("incident_agent.database")
 
 class Base(AsyncAttrs, DeclarativeBase):
     """Base declarative class for all SQLAlchemy 2.0 async models."""
+
     pass
 
 

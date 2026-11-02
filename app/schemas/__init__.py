@@ -1,8 +1,8 @@
 from app.schemas.incident import (
     IncidentBase,
     IncidentCreate,
-    IncidentUpdateStatus,
     IncidentResponse,
+    IncidentUpdateStatus,
 )
 
 __all__ = [

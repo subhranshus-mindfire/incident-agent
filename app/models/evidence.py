@@ -1,8 +1,11 @@
-from datetime import datetime
 import uuid
-from typing import Dict, Any, TYPE_CHECKING
-from sqlalchemy import String, Text, DateTime, ForeignKey, JSON, Enum as SQLEnum, func
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
+
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from app.config.database import Base
 from app.constants.enums import EvidenceType
 
@@ -31,7 +34,7 @@ class Evidence(Base):
     )
     source: Mapped[str] = mapped_column(String(128), nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
-    payload: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     collected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -39,4 +42,6 @@ class Evidence(Base):
     )
 
     # Relationships
-    investigation: Mapped["Investigation"] = relationship("Investigation", back_populates="evidences")
+    investigation: Mapped["Investigation"] = relationship(
+        "Investigation", back_populates="evidences"
+    )

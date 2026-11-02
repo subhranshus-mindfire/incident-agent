@@ -1,8 +1,11 @@
-from datetime import datetime
 import uuid
-from typing import Dict, Any
-from sqlalchemy import String, DateTime, JSON, Enum as SQLEnum, func
+from datetime import datetime
+from typing import Any
+
+from sqlalchemy import JSON, DateTime, String, func
+from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column
+
 from app.config.database import Base
 from app.constants.enums import AuditAction
 
@@ -22,7 +25,7 @@ class AuditLog(Base):
         nullable=False,
     )
     actor: Mapped[str] = mapped_column(String(128), default="system", nullable=False)
-    details: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

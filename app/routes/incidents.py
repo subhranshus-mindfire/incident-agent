@@ -1,11 +1,11 @@
-from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.config.database import get_db_session
-from app.services.incident_service import IncidentService
-from app.schemas.incident import IncidentCreate, IncidentResponse, IncidentUpdateStatus
-from app.constants.enums import IncidentStatus, IncidentSeverity
+from app.constants.enums import IncidentSeverity, IncidentStatus
 from app.exceptions.domain import IncidentNotFoundException
+from app.schemas.incident import IncidentCreate, IncidentResponse, IncidentUpdateStatus
+from app.services.incident_service import IncidentService
 
 router = APIRouter(prefix="/incidents", tags=["Incidents"])
 
@@ -15,15 +15,17 @@ def get_incident_service(session: AsyncSession = Depends(get_db_session)) -> Inc
     return IncidentService(session)
 
 
-@router.get("", response_model=List[IncidentResponse], status_code=status.HTTP_200_OK)
+@router.get("", response_model=list[IncidentResponse], status_code=status.HTTP_200_OK)
 async def list_incidents(
-    service: Optional[str] = Query(None, description="Filter by service name"),
-    severity: Optional[IncidentSeverity] = Query(None, description="Filter by severity"),
-    incident_status: Optional[IncidentStatus] = Query(None, alias="status", description="Filter by status"),
+    service: str | None = Query(None, description="Filter by service name"),
+    severity: IncidentSeverity | None = Query(None, description="Filter by severity"),
+    incident_status: IncidentStatus | None = Query(
+        None, alias="status", description="Filter by status"
+    ),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     incident_service: IncidentService = Depends(get_incident_service),
-) -> List[IncidentResponse]:
+) -> list[IncidentResponse]:
     """Retrieve filtered and paginated incidents."""
     incidents = await incident_service.list_incidents(
         service=service,
@@ -57,7 +59,9 @@ async def get_incident(
     return IncidentResponse.model_validate(incident)
 
 
-@router.patch("/{incident_id}/status", response_model=IncidentResponse, status_code=status.HTTP_200_OK)
+@router.patch(
+    "/{incident_id}/status", response_model=IncidentResponse, status_code=status.HTTP_200_OK
+)
 async def update_incident_status(
     incident_id: str,
     payload: IncidentUpdateStatus,
