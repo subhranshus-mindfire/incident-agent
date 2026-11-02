@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Any
 
 from qdrant_client import AsyncQdrantClient, models
@@ -10,6 +11,10 @@ from app.schemas.runbook import Runbook, RunbookSearchResult
 from app.services.embedding_service import EmbeddingService, get_embedding_service
 
 logger = logging.getLogger("incident_agent.qdrant_service")
+
+UUID_REGEX = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 
 
 class QdrantService:
@@ -49,35 +54,46 @@ class QdrantService:
             logger.warning(f"Qdrant health check failed: {exc}")
             return False
 
+    @staticmethod
+    def is_valid_uuid(val: str) -> bool:
+        """Validates whether a string is a standard RFC 4122 UUID."""
+        return bool(UUID_REGEX.match(val))
+
     async def init_collection(self) -> None:
-        """Ensures the runbook vector collection and payload indexes exist."""
+        """Ensures the runbook vector collection and payload indexes exist (idempotent)."""
         try:
-            collections_response = await self._client.get_collections()
-            collection_names = [col.name for col in collections_response.collections]
+            exists = await self._client.collection_exists(self.collection_name)
 
-            if self.collection_name not in collection_names:
+            if not exists:
                 logger.info(f"Creating Qdrant collection '{self.collection_name}'...")
-                await self._client.create_collection(
-                    collection_name=self.collection_name,
-                    vectors_config=models.VectorParams(
-                        size=self._embedding_service.dimension,
-                        distance=models.Distance.COSINE,
-                    ),
-                )
-                logger.info(f"Collection '{self.collection_name}' created successfully.")
+                try:
+                    await self._client.create_collection(
+                        collection_name=self.collection_name,
+                        vectors_config=models.VectorParams(
+                            size=self._embedding_service.dimension,
+                            distance=models.Distance.COSINE,
+                        ),
+                    )
+                    logger.info(f"Collection '{self.collection_name}' created successfully.")
+                except UnexpectedResponse as exc:
+                    if "already exists" in str(exc).lower():
+                        logger.info(
+                            f"Collection '{self.collection_name}' already exists (race handled)."
+                        )
+                    else:
+                        raise
 
-                # Create payload keyword indexes for fast filtering
-                await self._client.create_payload_index(
-                    collection_name=self.collection_name,
-                    field_name="service",
-                    field_schema=models.PayloadSchemaType.KEYWORD,
-                )
-                await self._client.create_payload_index(
-                    collection_name=self.collection_name,
-                    field_name="incident_types",
-                    field_schema=models.PayloadSchemaType.KEYWORD,
-                )
-                logger.info("Payload indexes created for 'service' and 'incident_types'.")
+            # Create payload keyword indexes idempotently
+            for field in ("service", "incident_types"):
+                try:
+                    await self._client.create_payload_index(
+                        collection_name=self.collection_name,
+                        field_name=field,
+                        field_schema=models.PayloadSchemaType.KEYWORD,
+                    )
+                except UnexpectedResponse:
+                    pass  # Index already exists
+            logger.info("Payload indexes verified for 'service' and 'incident_types'.")
         except Exception as exc:
             logger.error(f"Failed to initialize Qdrant collection '{self.collection_name}': {exc}")
             raise ExternalServiceException(
@@ -136,6 +152,9 @@ class QdrantService:
         score_threshold: float = 0.20,
     ) -> list[RunbookSearchResult]:
         """Performs semantic cosine search across indexed runbooks with optional metadata filtering."""
+        if not query or not query.strip():
+            return []
+
         try:
             query_vector = await self._embedding_service.embed_text(query)
 
@@ -202,7 +221,10 @@ class QdrantService:
             ) from exc
 
     async def get_runbook(self, runbook_id: str) -> Runbook | None:
-        """Retrieves a single runbook by ID."""
+        """Retrieves a single runbook by ID. Returns None if ID is not a valid UUID."""
+        if not self.is_valid_uuid(runbook_id):
+            return None
+
         try:
             records = await self._client.retrieve(
                 collection_name=self.collection_name,
@@ -226,7 +248,10 @@ class QdrantService:
             ) from exc
 
     async def delete_runbook(self, runbook_id: str) -> bool:
-        """Deletes a runbook by ID from the vector store."""
+        """Deletes a runbook by ID from the vector store. Returns False if ID is invalid."""
+        if not self.is_valid_uuid(runbook_id):
+            return False
+
         try:
             await self._client.delete(
                 collection_name=self.collection_name,
@@ -262,3 +287,23 @@ class QdrantService:
                 service_name="Qdrant",
                 message=f"Failed to list runbooks: {exc}",
             ) from exc
+
+
+_shared_qdrant_service: QdrantService | None = None
+
+
+def get_shared_qdrant_service() -> QdrantService:
+    """Provides application-wide singleton QdrantService instance."""
+    global _shared_qdrant_service
+    if _shared_qdrant_service is None:
+        _shared_qdrant_service = QdrantService()
+    return _shared_qdrant_service
+
+
+async def close_shared_qdrant_service() -> None:
+    """Gracefully closes the shared Qdrant connection pool on shutdown."""
+    global _shared_qdrant_service
+    if _shared_qdrant_service is not None:
+        await _shared_qdrant_service.close()
+        _shared_qdrant_service = None
+        logger.info("Shared Qdrant connection pool closed.")

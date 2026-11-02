@@ -213,5 +213,31 @@ async def test_runbooks_api_endpoints(client: httpx.AsyncClient, memory_qdrant: 
         assert not_found_res.status_code == 404
         assert "not found" in not_found_res.json()["title"].lower()
 
+        # 9. Retrieve with invalid UUID returns 404 RFC 7807 (not 502)
+        invalid_uuid_res = await client.get("/api/v1/runbooks/not-a-valid-uuid-12345")
+        assert invalid_uuid_res.status_code == 404
+        assert "not found" in invalid_uuid_res.json()["title"].lower()
+
     finally:
         app.dependency_overrides.pop(get_qdrant_service, None)
+
+
+@pytest.mark.asyncio
+async def test_invalid_uuid_safety(memory_qdrant: QdrantService):
+    assert await memory_qdrant.get_runbook("invalid-uuid-format") is None
+    assert await memory_qdrant.delete_runbook("invalid-uuid-format") is False
+
+
+@pytest.mark.asyncio
+async def test_oversized_text_bounding(embedding_service: EmbeddingService):
+    massive_text = "error timeout database " * 5000  # 115,000 characters
+    vec = await embedding_service.embed_text(massive_text)
+    assert len(vec) == 384
+    norm = math.sqrt(sum(v * v for v in vec))
+    assert math.isclose(norm, 1.0, rel_tol=1e-4)
+
+
+@pytest.mark.asyncio
+async def test_empty_query_search(memory_qdrant: QdrantService):
+    assert await memory_qdrant.search_runbooks("") == []
+    assert await memory_qdrant.search_runbooks("   ") == []

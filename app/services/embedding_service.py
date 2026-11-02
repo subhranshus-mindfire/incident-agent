@@ -27,12 +27,17 @@ class DeterministicDenseEmbedder:
     3. Fully deterministic, offline-capable, and zero-dependency for reliable CI/CD & hermetic environments.
     """
 
+    MAX_TEXT_LENGTH: int = 4000
+    MAX_TOKENS: int = 500
+
     def __init__(self, dimension: int = 384) -> None:
         self.dimension = dimension
 
     def _tokenize(self, text: str) -> list[str]:
-        cleaned = re.sub(r"[^a-zA-Z0-9_\-\s]", " ", text.lower())
-        tokens = [t for t in cleaned.split() if len(t) > 1]
+        # Bound input size to prevent memory bloat and CPU exhaustion on oversized inputs
+        bounded_text = text[: self.MAX_TEXT_LENGTH]
+        cleaned = re.sub(r"[^a-zA-Z0-9_\-\s]", " ", bounded_text.lower())
+        tokens = [t for t in cleaned.split() if len(t) > 1][: self.MAX_TOKENS]
 
         # Generate character/word bi-grams for semantic sensitivity
         bigrams = [f"{tokens[i]}_{tokens[i + 1]}" for i in range(len(tokens) - 1)]

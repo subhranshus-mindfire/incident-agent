@@ -54,13 +54,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if settings.ENVIRONMENT != "test":
         try:
             from app.constants.default_runbooks import DEFAULT_PRODUCTION_RUNBOOKS
-            from app.services.qdrant_service import QdrantService
+            from app.services.qdrant_service import get_shared_qdrant_service
 
-            qdrant = QdrantService()
+            qdrant = get_shared_qdrant_service()
             await qdrant.init_collection()
             for rb in DEFAULT_PRODUCTION_RUNBOOKS:
                 await qdrant.upsert_runbook(rb)
-            await qdrant.close()
             logger.info("Qdrant collection and default production runbooks initialized.")
         except Exception as ex:
             logger.warning("Qdrant initialization encountered an issue: %s", ex)
@@ -69,6 +68,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
     logger.info("Shutting down %s...", settings.APP_NAME)
+    from app.services.qdrant_service import close_shared_qdrant_service
+
+    await close_shared_qdrant_service()
     await close_shared_http_client()
     try:
         await close_db()

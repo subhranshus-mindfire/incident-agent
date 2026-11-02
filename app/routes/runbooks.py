@@ -1,6 +1,5 @@
 import logging
 from datetime import UTC, datetime
-from functools import lru_cache
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, status
@@ -13,17 +12,19 @@ from app.schemas.runbook import (
     RunbookSearchRequest,
     RunbookSearchResult,
 )
-from app.services.qdrant_service import QdrantService
+from app.services.qdrant_service import (
+    QdrantService,
+    get_shared_qdrant_service,
+)
 
 logger = logging.getLogger("incident_agent.routes.runbooks")
 
 router = APIRouter(prefix="/runbooks", tags=["Runbooks & Knowledge Base"])
 
 
-@lru_cache
 def get_qdrant_service() -> QdrantService:
-    """Provides cached singleton QdrantService instance."""
-    return QdrantService()
+    """Provides singleton QdrantService instance."""
+    return get_shared_qdrant_service()
 
 
 @router.post(
