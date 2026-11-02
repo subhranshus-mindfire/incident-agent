@@ -36,7 +36,7 @@ services:
       - incident-network
 
   qdrant:
-    image: qdrant/qdrant:v1.8.4
+    image: qdrant/qdrant:v1.12.1
     container_name: incident-agent-qdrant
     restart: unless-stopped
     ports:

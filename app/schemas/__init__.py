@@ -4,6 +4,14 @@ from app.schemas.incident import (
     IncidentResponse,
     IncidentUpdateStatus,
 )
+from app.schemas.runbook import (
+    Runbook,
+    RunbookCreate,
+    RunbookSearchRequest,
+    RunbookSearchResult,
+    RunbookSection,
+    RunbookUpdate,
+)
 from app.schemas.telemetry import (
     AnomalyAlert,
     GoldenSignalMetrics,
@@ -21,6 +29,12 @@ __all__ = [
     "IncidentCreate",
     "IncidentUpdateStatus",
     "IncidentResponse",
+    "Runbook",
+    "RunbookCreate",
+    "RunbookUpdate",
+    "RunbookSearchResult",
+    "RunbookSearchRequest",
+    "RunbookSection",
     "MetricPoint",
     "MetricSeries",
     "MetricQueryResult",

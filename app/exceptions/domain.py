@@ -30,6 +30,18 @@ class EntityNotFoundException(AppException):
         )
 
 
+class ValidationException(AppException):
+    """Raised when request payload or parameters fail business domain validation."""
+
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(
+            message=message,
+            status_code=400,
+            error_code="VALIDATION_ERROR",
+            details=details or {},
+        )
+
+
 class IncidentNotFoundException(EntityNotFoundException):
     def __init__(self, incident_id: str) -> None:
         super().__init__(entity_name="Incident", entity_id=incident_id)
