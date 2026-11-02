@@ -1,0 +1,62 @@
+from datetime import datetime
+import uuid
+from typing import Optional, List, Dict, Any, TYPE_CHECKING
+from sqlalchemy import String, Text, Float, DateTime, ForeignKey, Enum as SQLEnum, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from app.config.database import Base
+from app.constants.enums import InvestigationStatus
+
+if TYPE_CHECKING:
+    from app.models.incident import Incident
+    from app.models.evidence import Evidence
+    from app.models.remediation import RemediationAction
+
+
+def generate_uuid() -> str:
+    return f"inv-{uuid.uuid4().hex[:12]}"
+
+
+class Investigation(Base):
+    __tablename__ = "investigations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=generate_uuid)
+    incident_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("incidents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    status: Mapped[InvestigationStatus] = mapped_column(
+        SQLEnum(InvestigationStatus, name="investigation_status_enum", native_enum=False),
+        default=InvestigationStatus.PENDING,
+        nullable=False,
+        index=True,
+    )
+    root_cause_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    confidence_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    # Relationships
+    incident: Mapped["Incident"] = relationship("Incident", back_populates="investigations")
+    evidences: Mapped[List["Evidence"]] = relationship(
+        "Evidence",
+        back_populates="investigation",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    remediations: Mapped[List["RemediationAction"]] = relationship(
+        "RemediationAction",
+        back_populates="investigation",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )

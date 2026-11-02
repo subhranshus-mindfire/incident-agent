@@ -1,46 +1,59 @@
 import pytest
-from httpx import ASGITransport, AsyncClient
-from app.main import app
+from httpx import AsyncClient
 
 
 @pytest.mark.asyncio
-async def test_list_incidents():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/v1/incidents")
-        assert response.status_code == 200
-        data = response.json()
-        assert isinstance(data, list)
-        assert len(data) >= 1
-        assert "id" in data[0]
-        assert "service" in data[0]
+async def test_list_incidents_empty(client: AsyncClient):
+    response = await client.get("/api/v1/incidents")
+    assert response.status_code == 200
+    assert response.json() == []
 
 
 @pytest.mark.asyncio
-async def test_create_and_get_incident():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        new_incident = {
-            "title": "Database Connection Pool Exhausted",
-            "service": "auth-service",
-            "severity": "high",
-            "description": "Max connections reached on primary replica"
-        }
-        create_res = await client.post("/api/v1/incidents", json=new_incident)
-        assert create_res.status_code == 201
-        created_data = create_res.json()
-        assert created_data["title"] == new_incident["title"]
-        assert created_data["service"] == new_incident["service"]
-        incident_id = created_data["id"]
+async def test_create_and_fetch_incident_lifecycle(client: AsyncClient):
+    payload = {
+        "title": "Payment Gateway Timeout Surge",
+        "service": "payment-service",
+        "severity": "critical",
+        "description": "504 Gateway Timeout spike following deployment v2.1.0",
+        "extra_metadata": {"cluster": "prod-us-east-1"}
+    }
+    # Create
+    create_res = await client.post("/api/v1/incidents", json=payload)
+    assert create_res.status_code == 201
+    created_data = create_res.json()
+    assert created_data["title"] == payload["title"]
+    assert created_data["service"] == payload["service"]
+    assert created_data["severity"] == "critical"
+    assert created_data["status"] == "open"
+    incident_id = created_data["id"]
 
-        # Fetch created incident
-        get_res = await client.get(f"/api/v1/incidents/{incident_id}")
-        assert get_res.status_code == 200
-        fetched_data = get_res.json()
-        assert fetched_data["id"] == incident_id
-        assert fetched_data["title"] == new_incident["title"]
+    # Fetch by ID
+    get_res = await client.get(f"/api/v1/incidents/{incident_id}")
+    assert get_res.status_code == 200
+    fetched_data = get_res.json()
+    assert fetched_data["id"] == incident_id
+    assert fetched_data["title"] == payload["title"]
+
+    # Update Status
+    patch_res = await client.patch(
+        f"/api/v1/incidents/{incident_id}/status",
+        json={"status": "investigating", "reason": "Automated triage started"}
+    )
+    assert patch_res.status_code == 200
+    updated_data = patch_res.json()
+    assert updated_data["status"] == "investigating"
+
+    # List with filter
+    filter_res = await client.get("/api/v1/incidents?service=payment-service&severity=critical")
+    assert filter_res.status_code == 200
+    list_data = filter_res.json()
+    assert len(list_data) == 1
+    assert list_data[0]["id"] == incident_id
 
 
 @pytest.mark.asyncio
-async def test_get_nonexistent_incident():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/v1/incidents/inc-non-existent-999")
-        assert response.status_code == 404
+async def test_get_nonexistent_incident(client: AsyncClient):
+    response = await client.get("/api/v1/incidents/inc-nonexistent-404")
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()

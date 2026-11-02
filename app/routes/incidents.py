@@ -1,56 +1,79 @@
-import uuid
-from datetime import datetime, timezone
-from typing import List
-from fastapi import APIRouter, HTTPException, status
-from app.schemas.incident import IncidentCreate, IncidentResponse
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.config.database import get_db_session
+from app.services.incident_service import IncidentService
+from app.schemas.incident import IncidentCreate, IncidentResponse, IncidentUpdateStatus
+from app.constants.enums import IncidentStatus, IncidentSeverity
 
 router = APIRouter(prefix="/incidents", tags=["Incidents"])
 
-# In-memory store placeholder until database connection is wired
-_incidents_db: List[dict] = [
-    {
-        "id": "inc-sim-001",
-        "title": "High Latency & 504 Gateway Timeouts",
-        "service": "checkout-service",
-        "severity": "critical",
-        "description": "P99 latency spiked past 5000ms after v1.2.0 deployment",
-        "status": "open",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "metadata": {"source": "prometheus_alert"}
-    }
-]
+
+def get_incident_service(session: AsyncSession = Depends(get_db_session)) -> IncidentService:
+    """Dependency provider for IncidentService."""
+    return IncidentService(session)
 
 
-@router.get("", response_model=List[IncidentResponse])
-async def list_incidents() -> List[IncidentResponse]:
-    """Retrieve all recorded incidents."""
-    return [IncidentResponse(**inc) for inc in _incidents_db]
+@router.get("", response_model=List[IncidentResponse], status_code=status.HTTP_200_OK)
+async def list_incidents(
+    service: Optional[str] = Query(None, description="Filter by service name"),
+    severity: Optional[IncidentSeverity] = Query(None, description="Filter by severity"),
+    incident_status: Optional[IncidentStatus] = Query(None, alias="status", description="Filter by status"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    incident_service: IncidentService = Depends(get_incident_service),
+) -> List[IncidentResponse]:
+    """Retrieve filtered and paginated incidents."""
+    incidents = await incident_service.list_incidents(
+        service=service,
+        severity=severity.value if severity else None,
+        status=incident_status.value if incident_status else None,
+        skip=skip,
+        limit=limit,
+    )
+    return [IncidentResponse.model_validate(inc) for inc in incidents]
 
 
 @router.post("", response_model=IncidentResponse, status_code=status.HTTP_201_CREATED)
-async def create_incident(payload: IncidentCreate) -> IncidentResponse:
-    """Register or simulate a new production incident."""
-    incident_dict = {
-        "id": f"inc-{uuid.uuid4().hex[:8]}",
-        "title": payload.title,
-        "service": payload.service,
-        "severity": payload.severity,
-        "description": payload.description,
-        "status": "open",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "metadata": {}
-    }
-    _incidents_db.append(incident_dict)
-    return IncidentResponse(**incident_dict)
+async def create_incident(
+    payload: IncidentCreate,
+    incident_service: IncidentService = Depends(get_incident_service),
+) -> IncidentResponse:
+    """Register or ingest a new incident into the system."""
+    incident = await incident_service.create_incident(payload)
+    return IncidentResponse.model_validate(incident)
 
 
-@router.get("/{incident_id}", response_model=IncidentResponse)
-async def get_incident(incident_id: str) -> IncidentResponse:
-    """Retrieve details for a specific incident."""
-    for inc in _incidents_db:
-        if inc["id"] == incident_id:
-            return IncidentResponse(**inc)
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"Incident with ID '{incident_id}' not found."
+@router.get("/{incident_id}", response_model=IncidentResponse, status_code=status.HTTP_200_OK)
+async def get_incident(
+    incident_id: str,
+    incident_service: IncidentService = Depends(get_incident_service),
+) -> IncidentResponse:
+    """Retrieve details of a specific incident."""
+    incident = await incident_service.get_incident(incident_id)
+    if not incident:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Incident with ID '{incident_id}' not found.",
+        )
+    return IncidentResponse.model_validate(incident)
+
+
+@router.patch("/{incident_id}/status", response_model=IncidentResponse, status_code=status.HTTP_200_OK)
+async def update_incident_status(
+    incident_id: str,
+    payload: IncidentUpdateStatus,
+    incident_service: IncidentService = Depends(get_incident_service),
+) -> IncidentResponse:
+    """Update incident operational status."""
+    updated = await incident_service.update_status(
+        incident_id=incident_id,
+        new_status=payload.status,
+        reason=payload.reason,
     )
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Incident with ID '{incident_id}' not found.",
+        )
+    return IncidentResponse.model_validate(updated)
