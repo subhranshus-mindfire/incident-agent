@@ -1,0 +1,32 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: incident-agent-app
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_NAME=Incident Investigation Agent
+      - APP_VERSION=0.1.0
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - HOST=0.0.0.0
+      - PORT=8000
+    volumes:
+      - ./app:/workspace/app
+      - ./tests:/workspace/tests
+    restart: unless-stopped
+
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: incident-agent-test
+    environment:
+      - ENVIRONMENT=test
+      - PYTHONPATH=/workspace
+    volumes:
+      - ./app:/workspace/app
+      - ./tests:/workspace/tests
+    command: ["pytest", "-v", "tests/"]
