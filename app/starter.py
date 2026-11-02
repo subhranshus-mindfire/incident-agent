@@ -50,10 +50,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as ex:
         logger.warning("Automated migration check encountered an issue: %s", ex)
 
+    # Initialize Qdrant collection and seed runbooks in non-test environments
+    if settings.ENVIRONMENT != "test":
+        try:
+            from app.constants.default_runbooks import DEFAULT_PRODUCTION_RUNBOOKS
+            from app.services.qdrant_service import get_shared_qdrant_service
+
+            qdrant = get_shared_qdrant_service()
+            await qdrant.init_collection()
+            for rb in DEFAULT_PRODUCTION_RUNBOOKS:
+                await qdrant.upsert_runbook(rb)
+            logger.info("Qdrant collection and default production runbooks initialized.")
+        except Exception as ex:
+            logger.warning("Qdrant initialization encountered an issue: %s", ex)
+
     # Yield control to the application
     yield
 
     logger.info("Shutting down %s...", settings.APP_NAME)
+    from app.services.qdrant_service import close_shared_qdrant_service
+
+    await close_shared_qdrant_service()
     await close_shared_http_client()
     try:
         await close_db()

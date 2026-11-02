@@ -21,10 +21,12 @@ class Settings(BaseSettings):
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
 
-    # Qdrant
+    # Qdrant & Embeddings
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
+    QDRANT_API_KEY: str | None = None
     QDRANT_COLLECTION: str = "runbooks"
+    EMBEDDING_DIMENSION: int = 384
 
     # Observability
     PROMETHEUS_URL: str = "http://localhost:9090"
