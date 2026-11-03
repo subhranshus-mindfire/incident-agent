@@ -30,6 +30,7 @@ dependencies = [
     "langgraph>=0.0.30",
     "langchain>=0.1.13",
     "langchain-core>=0.1.33",
+    "langchain-groq>=0.1.9",
 ]
 
 [project.optional-dependencies]

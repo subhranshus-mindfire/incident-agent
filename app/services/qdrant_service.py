@@ -342,6 +342,29 @@ class QdrantService:
             )
         return len(points)
 
+    async def list_historical_incident_ids(self, max_points: int = 1000) -> set[str]:
+        """IDs of incidents held in long-term memory, so callers can show what the agent can recall."""
+        if not await self._client.collection_exists(self.incidents_collection):
+            return set()
+        ids: set[str] = set()
+        offset = None
+        while len(ids) < max_points:
+            points, offset = await self._client.scroll(
+                collection_name=self.incidents_collection,
+                limit=100,
+                offset=offset,
+                with_payload=["incident_id"],
+                with_vectors=False,
+            )
+            ids.update(
+                str(p.payload["incident_id"])
+                for p in points
+                if p.payload and "incident_id" in p.payload
+            )
+            if offset is None:
+                break
+        return ids
+
     async def search_historical_incidents(
         self,
         query: str,

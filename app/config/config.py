@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     PROMETHEUS_URL: str = "http://localhost:9090"
     LOKI_URL: str = "http://localhost:3100"
 
+    # LLM (Groq, OpenAI-compatible chat completions with tool calling)
+    GROQ_API_KEY: str | None = None
+    GROQ_MODEL: str = "openai/gpt-oss-120b"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 
