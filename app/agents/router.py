@@ -18,6 +18,7 @@ from app.constants.chat import (
     KNOWN_SERVICES,
 )
 from app.constants.services import PRIMARY_SERVICE
+from app.services.dependency_view import dependency_reply
 from app.services.live_status import answer_live, classify_live_request, resolve_service
 from app.utils.text import squeeze_repeats
 
@@ -72,5 +73,9 @@ async def route_message(message: str, history: list[dict[str, str]]) -> RoutedMe
     live = classify_live_request(text)
     if live is not None:
         return RoutedMessage(text=text, reply=await answer_live(live, resolve_service(text)))
+
+    dependencies = dependency_reply(text)
+    if dependencies is not None:
+        return RoutedMessage(text=text, reply=dependencies)
 
     return RoutedMessage(text=text, reply=None)

@@ -178,3 +178,22 @@ async def test_yes_after_awaiting_approval_points_to_the_console() -> None:
 async def test_yes_without_pending_approval_goes_to_the_agent() -> None:
     routed = await route_message("Yes", [{"role": "assistant", "content": "Hello there."}])
     assert routed.reply is None
+
+
+async def test_dependency_question_is_answered_from_the_map() -> None:
+    routed = await route_message("What services depend on order-service?", [])
+    assert routed.reply is not None
+    assert "api-gateway" in routed.reply and "mobile-app" in routed.reply
+
+
+async def test_dependency_question_for_payment_api_lists_downstream() -> None:
+    routed = await route_message(
+        "Examine service dependencies for payment-api. Identify upstream and downstream.", []
+    )
+    assert routed.reply is not None
+    assert "postgres" in routed.reply and "order-service" in routed.reply
+
+
+async def test_dependency_question_without_known_service_goes_to_agent() -> None:
+    routed = await route_message("What depends on the billing system?", [])
+    assert routed.reply is None
