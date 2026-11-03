@@ -19,6 +19,7 @@ from langchain_groq import ChatGroq
 from pydantic import SecretStr
 
 from app.config.config import get_settings
+from app.services.chat_router import route_message
 from app.services.clients import get_loki_service, get_prometheus_service
 from app.services.qdrant_service import get_shared_qdrant_service
 from app.tools.investigation_tools import get_recent_deployments, search_past_incidents
@@ -255,7 +256,12 @@ def _to_messages(history: list[dict[str, str]], message: str) -> list[BaseMessag
 
 
 async def run_chat(message: str, history: list[dict[str, str]]) -> dict[str, Any]:
-    """Runs one chat turn: the model may call live tools, then answers from their results."""
+    """Runs one chat turn: fixed or live answers first, otherwise the model calls tools and answers from them."""
+    routed = await route_message(message, history)
+    if routed.reply is not None:
+        return {"reply": routed.reply, "incident": None}
+    message = routed.text
+
     settings = get_settings()
     if not settings.GROQ_API_KEY:
         return {
