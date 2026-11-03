@@ -1,66 +1,102 @@
-# Incident Investigation Agent
+# Incident Investigation & Root Cause Analysis Agent
 
-An AI-powered system designed to automatically investigate production incidents, identify root causes, and recommend corrective actions with Human-in-the-Loop (HITL) approval.
+An autonomous AI-powered incident investigation and remediation agent built with **LangGraph**, **FastAPI**, **Qdrant vector memory**, **PostgreSQL durable checkpoints**, **Prometheus**, **Grafana Loki**, and **Streamlit**.
 
-## 🚀 Overview
+---
 
-The **Incident Investigation Agent** integrates with application logs (Grafana Loki), system metrics (Prometheus), deployment history, and runbooks (Qdrant) to gather and correlate evidence during an incident. Using **LangGraph and LLM-powered reasoning**, it analyzes collected evidence, identifies probable causes, and generates evidence-backed investigation findings.
+## 🚀 Key Highlights & Capabilities
 
-### Core Capabilities
-- **Incident Detection & Simulation:** Create and investigate simulated production incidents across services.
-- **Log Analysis:** Retrieve and analyze application logs using Grafana Loki.
-- **Metrics Analysis:** Examine CPU, memory, latency, error rates, and system metrics using Prometheus.
-- **Deployment Analysis:** Correlate incidents with recent deployments and configuration changes.
-- **Knowledge Retrieval:** Retrieve relevant runbooks and historical incident reports using Qdrant vector search.
-- **Root Cause Analysis (RCA):** Generate and rank possible root causes based on collected evidence.
-- **Remediation Recommendations:** Suggest actionable steps with blast radius/impact evaluation.
-- **Human Approval (HITL):** Require engineer approval before executing any remediation action.
-- **Automated Verification:** Monitor system health after remediation to verify recovery.
-- **RCA Reporting:** Generate structured post-incident reports containing timelines, evidence, root cause, and verification results.
+- **100% Real-Time Telemetry & Zero Static Mocks:** Integrates with live microservices, Prometheus metric scrapers, Loki log push streams, and Qdrant semantic vector memory.
+- **Stateful LangGraph Workflow:** 16-field typed state machine implementing alert ingestion, parallel diagnostic retrieval, evidence correlation, RCA hypothesis formulation, blast radius assessment, and postmortem generation.
+- **Human-in-the-Loop (HITL) Approval Interrupt:** Enforces mandatory human approval for high-risk actions (`ROLLBACK_DEPLOYMENT`, `TERMINATE_DB_TRANSACTIONS`) via LangGraph interrupts and PostgreSQL checkpoints.
+- **Evidence Sufficiency & Diagnostics Loops:** Conditional edge routes back into diagnostic loops if evidence is insufficient or when the human operator requests additional diagnostics.
+- **Live Target Microservice (`payment-api`):** Fully instrumented live service with Prometheus `/metrics`, `/pay`, dynamic versioning, chaos fault injection endpoints, and live remediation hooks.
+- **Streamlit Human Approval & Investigation Console:** Web console for live incident triggering, telemetry inspection, one-click HITL approval, and postmortem downloads.
 
 ---
 
 ## 🛠️ Technology Stack
 
-- **Backend:** Python 3.11+, FastAPI
-- **Agent Orchestration:** LangGraph, LangChain
-- **LLM Integration:** Gemini / OpenAI / Anthropic
-- **Databases:** PostgreSQL (Relational metadata & audit logs), Redis (Session & state cache), Qdrant (Vector database for runbooks)
-- **Observability:** Prometheus (Metrics), Grafana Loki (Logs), Grafana (Visualization), Promtail
-- **Frontend:** React, TypeScript
-- **Infrastructure:** Docker and Docker Compose
+- **Backend Framework:** Python 3.12, FastAPI, Uvicorn, Pydantic v2
+- **Agent Orchestration:** LangGraph, LangChain Core
+- **Database & Checkpointing:** PostgreSQL (Asyncpg / SQLAlchemy 2.0) with LangGraph durable checkpointer, Redis
+- **Vector Memory:** Qdrant (`historical_incidents` and `runbooks` collections with cosine similarity)
+- **Telemetry & Observability:** Prometheus (PromQL metrics), Grafana Loki (LogQL logs)
+- **Investigation UI:** Streamlit (`ui/app.py`) on port `8501`
+- **Simulation Testbed:** Live `payment-api` on port `8080` with chaos fault injection
+- **Containerization:** Docker & Docker Compose
 
 ---
 
-## 📁 Repository Structure
+## 📖 Architecture & State Schema
 
-```text
-Incident-Agent/
-├── .github/              # GitHub Actions CI/CD workflows
-├── app/                  # Core FastAPI backend & Agent application
-│   ├── agents/           # LangGraph state machine, nodes, and workflows
-│   ├── config/           # Application configuration, DB/Redis/Qdrant clients
-│   ├── constants/        # Enums, constants, and status definitions
-│   ├── exceptions/       # Custom exceptions & global exception handlers
-│   ├── health.py         # Service health check endpoints
-│   ├── llms/             # LLM factory and provider integrations
-│   ├── main.py           # FastAPI application factory
-│   ├── models/           # SQLAlchemy ORM database models
-│   ├── prompts/          # System prompts and RCA templates
-│   ├── repository/       # Database access layers (CRUD operations)
-│   ├── routes/           # API endpoints (Incidents, Runbooks, Remediations)
-│   ├── schemas/          # Pydantic schemas and state definitions
-│   ├── services/         # Telemetry, Qdrant, and incident services
-│   ├── starter.py        # Application startup & lifecycle management
-│   ├── tools/            # LangGraph tool bindings (PromQL, LogQL, Vector search)
-│   ├── utils/            # Helper utilities and logging formatters
-│   └── workers/          # Background tasks and execution adapters
-├── frontend/             # React web console
-├── simulation/           # Buggy target microservice for incident simulation
-├── observability/        # Prometheus, Loki, Promtail, and Grafana configs
-├── tests/                # Test suite
-├── Dockerfile
-├── docker-compose.yml
-├── Makefile
-└── requirements.txt
+- **[Detailed Graph Architecture & State Schema](docs/architecture.md):** Complete Mermaid flowchart diagram of graph nodes, feedback loops, conditional edges, and the 16-field `InvestigationState` schema.
+- **[Sample Root Cause Analysis (RCA) Postmortem Report](docs/sample_rca_report.md):** Production-grade incident postmortem with timeline, correlated evidence, root cause, and remediation verification.
+
+---
+
+## ⚡ Quickstart Guide
+
+### 1. Start the Complete Stack
+Start all services (Postgres, Redis, Qdrant, Prometheus, Loki, FastAPI Agent, Payment API, and Streamlit UI):
+
+```bash
+docker compose up -d
+```
+
+### 2. Access Web Interfaces & Endpoints
+| Service | Endpoint | Purpose |
+| :--- | :--- | :--- |
+| **Streamlit Investigation Console** | `http://localhost:8501` | Interactive investigation trigger, telemetry inspector & HITL approval |
+| **FastAPI Agent Backend API** | `http://localhost:8000/docs` | OpenAPI documentation & agent endpoints |
+| **Payment API (Target Microservice)**| `http://localhost:8080/health` | Live microservice with chaos & remediation hooks |
+| **Prometheus Dashboard** | `http://localhost:9090` | Scrapes `payment-api` metrics every 5 seconds |
+| **Grafana Loki** | `http://localhost:3100` | Log ingestion stream |
+| **Qdrant Vector Engine** | `http://localhost:6333/dashboard` | Historical incident & runbook vector collections |
+
+---
+
+## 🧪 Chaos Injection & Investigation Workflow
+
+You can run an end-to-end incident investigation with one-click commands:
+
+### Step 1: Inject Production Failure Mode
+```bash
+# Injects database pool deadlock and generates failed payment traffic:
+make chaos-deadlock
+
+# Or inject bad deployment v2.3.1 regression:
+make chaos-bad-deploy
+```
+
+### Step 2: Trigger AI Agent Investigation
+Open the Streamlit UI at `http://localhost:8501` or run via `curl`:
+```bash
+curl -X POST http://localhost:8000/api/v1/investigations/trigger \
+  -H "Content-Type: application/json" \
+  -d '{
+    "service": "payment-api",
+    "symptoms": "Our payment API is returning HTTP 500 errors. Database connection pool timeout reported.",
+    "severity": "critical"
+  }'
+```
+
+### Step 3: Human-in-the-Loop Review & Approval
+Review the evidence and approve the remediation in the Streamlit UI or via API:
+```bash
+curl -X POST http://localhost:8000/api/v1/investigations/<incident_id>/approve \
+  -H "Content-Type: application/json" \
+  -d '{"reason": "Approved by on-call engineer"}'
+```
+
+The agent will execute the live remediation on `payment-api`, verify recovery, index the incident into Qdrant vector memory, and generate a structured RCA report.
+
+---
+
+## 🧪 Running Automated Tests
+
+Run the full automated test suite (50 tests covering state machine, HITL approval, Qdrant vector search, Prometheus/Loki telemetry, simulation, and UI):
+
+```bash
+docker compose run --rm test
 ```
