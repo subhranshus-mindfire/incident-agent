@@ -9,12 +9,14 @@ from app.schemas.agent_state import (
     LogSignature,
     RCAHypothesis,
     RemediationActionType,
+    RemediationExecutionResult,
     RemediationProposal,
     RiskTier,
     TelemetrySummary,
 )
 from app.services.investigation_service import InvestigationService
 from app.services.remediation_service import RemediationExecutor
+from app.tools import investigation_tools
 
 
 @pytest.fixture
@@ -354,7 +356,7 @@ async def test_diagnostics_request_feedback_loop(client: httpx.AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_required_seven_tools_contract():
+async def test_required_seven_tools_contract(monkeypatch: pytest.MonkeyPatch):
     """Validates the 7 required functional tools defined in Section 6."""
     from app.tools.investigation_tools import (
         create_incident_report,
@@ -389,6 +391,13 @@ async def test_required_seven_tools_contract():
     assert isinstance(past, list)
 
     # 6. execute_remediation
+    # Never send a real rollback to the live simulator from a test.
+    async def fake_apply(action_type: object) -> object:
+        return RemediationExecutionResult(
+            success=True, action_type=str(action_type), message="fake: applied"
+        )
+
+    monkeypatch.setattr(investigation_tools, "_apply_payment_api_remediation", fake_apply)
     rem_res = await execute_remediation(
         action="ROLLBACK_DEPLOYMENT", service="payment-api", approval_id="appr-123"
     )
