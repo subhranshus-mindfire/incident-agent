@@ -356,7 +356,7 @@ async def test_diagnostics_request_feedback_loop(client: httpx.AsyncClient):
 @pytest.mark.asyncio
 async def test_required_seven_tools_contract():
     """Validates the 7 required functional tools defined in Section 6."""
-    from app.tools import (
+    from app.tools.investigation_tools import (
         create_incident_report,
         execute_remediation,
         fetch_application_logs,
