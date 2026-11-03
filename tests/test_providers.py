@@ -58,3 +58,16 @@ def test_rate_limits_are_recognised_for_both_providers() -> None:
 
 def test_other_errors_are_not_rate_limits() -> None:
     assert not is_rate_limit_error(ValueError("bad input"))
+
+
+def test_ollama_provider_needs_no_api_key() -> None:
+    from langchain_ollama import ChatOllama
+
+    model = build_chat_model(
+        settings(
+            LLM_PROVIDER="ollama", OLLAMA_URL="http://ollama:11434", OLLAMA_MODEL="qwen2.5:3b"
+        ),
+        max_output_tokens=512,
+    )
+    assert isinstance(model, ChatOllama)
+    assert model.model == "qwen2.5:3b"

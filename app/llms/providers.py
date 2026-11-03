@@ -11,6 +11,7 @@ from typing import Any
 from langchain_core.language_models import BaseChatModel
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
+from langchain_ollama import ChatOllama
 from pydantic import SecretStr
 
 from app.config.config import Settings
@@ -23,6 +24,14 @@ class ProviderNotConfiguredError(RuntimeError):
 
 
 def build_chat_model(settings: Settings, max_output_tokens: int) -> BaseChatModel:
+    if settings.LLM_PROVIDER == "ollama":
+        # Local model: no API key and no provider quota. Speed depends on the host's CPU and memory.
+        return ChatOllama(
+            model=settings.OLLAMA_MODEL,
+            base_url=settings.OLLAMA_URL,
+            temperature=0,
+            num_predict=max_output_tokens,
+        )
     if settings.LLM_PROVIDER == "gemini":
         if not settings.GEMINI_API_KEY:
             raise ProviderNotConfiguredError("GEMINI_API_KEY is not set")

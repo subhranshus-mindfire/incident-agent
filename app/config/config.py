@@ -34,11 +34,13 @@ class Settings(BaseSettings):
     LOKI_URL: str = "http://localhost:3100"
 
     # LLM provider for the chat agent: "groq" or "gemini"
-    LLM_PROVIDER: Literal["groq", "gemini"] = "groq"
+    LLM_PROVIDER: Literal["groq", "gemini", "ollama"] = "groq"
     GROQ_API_KEY: str | None = None
     GROQ_MODEL: str = "openai/gpt-oss-120b"
     GEMINI_API_KEY: str | None = None
     GEMINI_MODEL: str = "gemini-2.5-flash"
+    OLLAMA_URL: str = "http://localhost:11434"
+    OLLAMA_MODEL: str = "qwen2.5:3b"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

@@ -19,6 +19,17 @@ services:
     networks:
       - incident-network
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: incident-agent-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - incident-network
+
   redis:
     image: redis:7-alpine
     container_name: incident-agent-redis
@@ -142,6 +153,8 @@ services:
       - GROQ_MODEL=${GROQ_MODEL:-openai/gpt-oss-120b}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      - OLLAMA_URL=http://ollama:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}
       - LOKI_URL=http://loki:3100
     depends_on:
       postgres:
@@ -212,6 +225,7 @@ volumes:
   qdrant_data:
   prometheus_data:
   loki_data:
+  ollama_data:
 
 networks:
   incident-network:
