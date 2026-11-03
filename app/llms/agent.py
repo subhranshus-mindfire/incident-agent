@@ -30,6 +30,8 @@ from app.services.clients import get_loki_service, get_prometheus_service
 from app.services.investigation_service import InvestigationService, summarize_trigger
 from app.services.qdrant_service import get_shared_qdrant_service
 from app.tools.investigation_tools import get_recent_deployments, search_past_incidents
+from app.utils.errors import error_payload
+from app.utils.time import clamp_seconds
 
 logger = logging.getLogger("incident_agent.llms.agent")
 
@@ -39,17 +41,10 @@ MAX_OUTPUT_TOKENS = 1024
 MAX_HISTORY_TURNS = 6
 MAX_HISTORY_CHARS = 600
 MAX_LIST_ROWS = 25
+MIN_WINDOW_SECONDS = 10
 MAX_WINDOW_SECONDS = 3600
 
 CHAT_SYSTEM_PROMPT = load_prompt("chat_agent")
-
-
-def _clamp_window(seconds: int) -> int:
-    return max(10, min(int(seconds), MAX_WINDOW_SECONDS))
-
-
-def _error(exc: Exception) -> dict[str, str]:
-    return {"error": f"{type(exc).__name__}: {exc}"}
 
 
 @tool
@@ -59,13 +54,13 @@ async def get_live_golden_signals(service: str, window_seconds: int = 60) -> dic
     Returns 5xx error rate (percent), request rate (per second), p95 latency (ms) and CPU (percent).
     A request rate of 0 means no traffic in the window.
     """
-    window = _clamp_window(window_seconds)
+    window = clamp_seconds(window_seconds, MIN_WINDOW_SECONDS, MAX_WINDOW_SECONDS)
     try:
         signals = await get_prometheus_service().get_golden_signals(
             service=service, window_seconds=window
         )
     except Exception as exc:
-        return _error(exc)
+        return error_payload(exc)
     return {**signals.model_dump(mode="json"), "window_seconds": window}
 
 
@@ -75,7 +70,7 @@ async def get_live_logs(service: str, window_seconds: int = 300, limit: int = 15
 
     An empty list means Loki has no lines for that service in the window.
     """
-    window = _clamp_window(window_seconds)
+    window = clamp_seconds(window_seconds, MIN_WINDOW_SECONDS, MAX_WINDOW_SECONDS)
     now = datetime.now(UTC)
     try:
         result = await get_loki_service().query_range(
@@ -86,7 +81,7 @@ async def get_live_logs(service: str, window_seconds: int = 300, limit: int = 15
             deduplicate=False,
         )
     except Exception as exc:
-        return _error(exc)
+        return error_payload(exc)
     entries = [e for stream in result.streams for e in stream.entries]
     entries.sort(key=lambda e: e.timestamp, reverse=True)
     lines = [
@@ -107,7 +102,7 @@ async def get_deployments(service: str) -> dict[str, Any]:
     try:
         records = await get_recent_deployments(service)
     except Exception as exc:
-        return _error(exc)
+        return error_payload(exc)
     return {"service": service, "deployments": [r.model_dump(mode="json") for r in records]}
 
 
@@ -117,7 +112,7 @@ async def search_incident_memory(query: str) -> dict[str, Any]:
     try:
         matches = await search_past_incidents(query=query, limit=3)
     except Exception as exc:
-        return _error(exc)
+        return error_payload(exc)
     return {
         "matches": [
             {k: v for k, v in m.model_dump(mode="json").items() if k != "incident_id"}
@@ -142,7 +137,7 @@ async def start_investigation(service: str, symptoms: str) -> dict[str, Any]:
                 severity=IncidentSeverity.CRITICAL,
             )
     except Exception as exc:
-        return _error(exc)
+        return error_payload(exc)
     summary = summarize_trigger(incident_id, service, result)
     state = summary["state"]
     return {
@@ -186,7 +181,7 @@ async def get_service_health(service: str) -> dict[str, Any]:
             res = await client.get(f"{target_url}/health")
             res.raise_for_status()
     except httpx.HTTPError as exc:
-        return {"service": service, "reachable": False, **_error(exc)}
+        return {"service": service, "reachable": False, **error_payload(exc)}
     return {"service": service, "reachable": True, **res.json()}
 
 
@@ -211,7 +206,7 @@ async def list_stored_incidents(
             res.raise_for_status()
             rows = res.json()
     except Exception as exc:
-        return _error(exc)
+        return error_payload(exc)
     try:
         memory_ids: (
             set[str] | None
@@ -343,7 +338,7 @@ async def run_chat(message: str, history: list[dict[str, str]]) -> dict[str, Any
                     result = await tool_fn.ainvoke(call["args"])
                 except Exception as exc:  # a bad tool call must not end the whole turn
                     logger.warning(f"Tool {call['name']} failed: {exc}")
-                    result = _error(exc)
+                    result = error_payload(exc)
             if (
                 call["name"] == "start_investigation"
                 and isinstance(result, dict)

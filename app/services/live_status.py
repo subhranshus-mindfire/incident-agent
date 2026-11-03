@@ -26,6 +26,8 @@ from app.constants.thresholds import (
 )
 from app.schemas.telemetry import GoldenSignalMetrics, LogEntry
 from app.services.clients import get_loki_service, get_prometheus_service
+from app.utils.formatting import status_label
+from app.utils.time import window_label
 
 logger = logging.getLogger("incident_agent.services.live_status")
 
@@ -91,10 +93,6 @@ def parse_window_seconds(text: str) -> int | None:
     return max(MIN_WINDOW_SECONDS, min(seconds, MAX_WINDOW_SECONDS))
 
 
-def window_label(seconds: int) -> str:
-    return f"{seconds} s" if seconds < 60 else f"{seconds // 60} min"
-
-
 def resolve_service(text: str) -> str:
     """Picks the service a question is about. payment-api is the default."""
     low = text.lower()
@@ -121,14 +119,6 @@ def classify_live_request(text: str) -> LiveRequest | None:
     if golden:
         return LiveRequest("metrics", window)
     return None
-
-
-def status_label(value: float, warn: float, crit: float, unit: str = "") -> str:
-    if value >= crit:
-        return f"🔴 {value:.1f}{unit}"
-    if value >= warn:
-        return f"🟡 {value:.1f}{unit}"
-    return f"🟢 {value:.1f}{unit}"
 
 
 def golden_table(signals: GoldenSignalMetrics) -> str:

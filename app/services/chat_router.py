@@ -12,6 +12,7 @@ from typing import Final
 
 from app.constants.services import PRIMARY_SERVICE
 from app.services.live_status import answer_live, classify_live_request, resolve_service
+from app.utils.text import squeeze_repeats
 
 GREETING_REPLIES: Final[dict[str, str]] = {
     "hi": "👋 Hey! I'm your incident investigation assistant. Tell me about a service issue or pick one of the suggested queries to get started.",
@@ -74,7 +75,6 @@ _FOLLOWUP_FIX_PATTERN: Final = re.compile(
     re.IGNORECASE,
 )
 _KNOWN_SERVICES: Final = ("payment-api", "order-service", "auth-service")
-_REPEATED_LETTERS: Final = re.compile(r"(.)\1+")
 # A short yes after a reply that is waiting for approval. Approval is a human action in the console.
 _AFFIRMATIVE_PATTERN: Final = re.compile(
     r"^(?:yes|yep|yeah|yup|ok|okay|sure|approve|approved|proceed|confirm)[.!]*$", re.IGNORECASE
@@ -98,11 +98,6 @@ class RoutedMessage:
     reply: str | None
 
 
-def _squeeze(text: str) -> str:
-    """Collapses repeated letters so 'hii' and 'helloo' match their canonical greetings."""
-    return _REPEATED_LETTERS.sub(r"\1", text)
-
-
 def resolve_follow_up(text: str, history: list[dict[str, str]]) -> str:
     """Expands a short follow-up such as 'fix it' into a request about the service discussed last."""
     if not _FOLLOWUP_FIX_PATTERN.match(text.strip()):
@@ -115,11 +110,11 @@ def resolve_follow_up(text: str, history: list[dict[str, str]]) -> str:
 
 
 def greeting_reply(text: str) -> str | None:
-    low = _squeeze(text.lower().strip().rstrip("!.,?"))
+    low = squeeze_repeats(text.lower().strip().rstrip("!.,?"))
     if any(word in text.lower() for word in _INVESTIGATION_KEYWORDS):
         return None
     for key, reply in GREETING_REPLIES.items():
-        canonical = _squeeze(key)
+        canonical = squeeze_repeats(key)
         if low == canonical or low.startswith(canonical + " "):
             return reply
     return None
