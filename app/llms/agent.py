@@ -14,7 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 import httpx
-from groq import RateLimitError
+from groq import BadRequestError, RateLimitError
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from langchain_groq import ChatGroq
@@ -34,6 +34,7 @@ from app.tools.investigation_tools import get_recent_deployments, search_past_in
 logger = logging.getLogger("incident_agent.llms.agent")
 
 MAX_TOOL_ROUNDS = 6
+MAX_TOOL_CALL_ATTEMPTS = 3
 MAX_OUTPUT_TOKENS = 1024
 MAX_PROVIDER_RETRIES = 5
 MAX_HISTORY_TURNS = 6
@@ -49,6 +50,7 @@ Rules:
   there is no traffic. Never say a service is idle or fault-free while its health reports a fault.
 - Never show incident IDs or other internal identifiers in a reply. Refer to incidents by title, service and time.
 - When a list is shorter than the total, say how many are shown out of the total.
+- Call only the tools you were given, by their exact names. Never invent a tool name.
 - Answer only from tool results. Never invent metric values, log lines, deployments, incident IDs or causes.
 - Do not suggest versions, commands or remediation steps that are not in a tool result.
 - If a tool returns an error or no data, say so plainly and do not guess.
@@ -273,6 +275,24 @@ TOOLS = [
 _TOOLS_BY_NAME = {t.name: t for t in TOOLS}
 
 
+def _is_unknown_tool_error(exc: BadRequestError) -> bool:
+    text = str(exc)
+    return "tool_use_failed" in text or "tool call validation failed" in text
+
+
+async def _invoke_model(llm: Any, messages: list[BaseMessage]) -> AIMessage:
+    """Calls the model. Retries when it names a tool that does not exist, which the provider rejects."""
+    for attempt in range(1, MAX_TOOL_CALL_ATTEMPTS + 1):
+        try:
+            response: AIMessage = await llm.ainvoke(messages)
+            return response
+        except BadRequestError as exc:
+            if not _is_unknown_tool_error(exc) or attempt == MAX_TOOL_CALL_ATTEMPTS:
+                raise
+            logger.warning(f"Model called an unknown tool (attempt {attempt}); retrying: {exc}")
+    raise RuntimeError("unreachable: the loop returns or raises")
+
+
 def _to_messages(history: list[dict[str, str]], message: str) -> list[BaseMessage]:
     messages: list[BaseMessage] = [SystemMessage(content=SYSTEM_PROMPT)]
     for item in history[-MAX_HISTORY_TURNS:]:
@@ -314,7 +334,7 @@ async def run_chat(message: str, history: list[dict[str, str]]) -> dict[str, Any
 
     for _ in range(MAX_TOOL_ROUNDS):
         try:
-            ai_message = await llm.ainvoke(messages)
+            ai_message = await _invoke_model(llm, messages)
         except RateLimitError as exc:
             logger.warning(f"Language model rate limit reached: {exc}")
             return {
