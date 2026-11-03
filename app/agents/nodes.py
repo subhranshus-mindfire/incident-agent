@@ -193,9 +193,37 @@ async def node_expand_diagnostics(state: InvestigationState) -> dict[str, Any]:
 
 
 async def node_formulate_rca(state: InvestigationState) -> dict[str, Any]:
-    """Node 5: Synthesizes evidence and runbooks into ranked RCA hypotheses."""
+    """Node 5: Synthesizes evidence and runbooks into ranked RCA hypotheses.
+    Short-circuits cleanly when no real evidence of a fault is found.
+    """
     engine = get_investigation_engine()
     qdrant = get_shared_qdrant_service()
+
+    telemetry = state.get("metrics") or state.get("telemetry")
+    logs = state.get("log_findings") or state.get("log_signatures", [])
+    evidence = state.get("evidence", [])
+
+    # Guard: If there are no anomalies, no error logs, and no correlated evidence,
+    # the service is healthy. Do not fabricate a root cause.
+    has_metric_anomaly = telemetry and (
+        telemetry.http_error_rate_pct > 3.0
+        or telemetry.p99_latency_seconds > 1.0
+        or telemetry.cpu_usage_pct > 80.0
+    )
+    has_error_logs = bool(logs)
+    has_evidence = len(evidence) > 0
+
+    if not has_metric_anomaly and not has_error_logs and not has_evidence:
+        logger.info("[Node 5: FormulateRCA] No anomalies detected — service appears healthy. Skipping RCA.")
+        return {
+            "hypotheses": [],
+            "rca_hypotheses": [],
+            "selected_hypothesis": None,
+            "audit_events": [
+                "No diagnostic evidence found — service metrics and logs appear within normal thresholds. "
+                "No root cause identified; no remediation proposed."
+            ],
+        }
 
     # Hydrate runbooks
     runbooks = []
@@ -203,9 +231,6 @@ async def node_formulate_rca(state: InvestigationState) -> dict[str, Any]:
         rb = await qdrant.get_runbook(r_id)
         if rb:
             runbooks.append(rb)
-
-    telemetry = state.get("metrics") or state.get("telemetry")
-    logs = state.get("log_findings") or state.get("log_signatures", [])
 
     hypotheses = engine.formulate_rca_hypotheses(
         service=state["service"],
@@ -227,7 +252,7 @@ async def node_formulate_rca(state: InvestigationState) -> dict[str, Any]:
                     title=f"Regression in Deployment {dep.version} ({dep.deployment_id})",
                     root_cause=f"Deployment {dep.version} introduced connection leakage and transaction deadlocks causing connection pool exhaustion.",
                     confidence_score=0.92,
-                    evidence_citations=state.get("evidence", [])[:4],
+                    evidence_citations=evidence[:4],
                     recommended_action=RemediationActionType.ROLLBACK_DEPLOYMENT,
                 ),
             )

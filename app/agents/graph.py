@@ -28,18 +28,23 @@ logger = logging.getLogger("incident_agent.agents.graph")
 def route_evidence_sufficiency(
     state: InvestigationState,
 ) -> Literal["formulate_rca", "expand_diagnostics"]:
-    """Conditional Edge: Evaluates whether collected diagnostic evidence is sufficient."""
+    """Conditional Edge: Evaluates whether collected diagnostic evidence is sufficient.
+    Always proceeds to RCA after one diagnostic pass; RCA node itself will short-circuit
+    if no anomalies are detected (healthy service path).
+    """
     evidence = state.get("evidence", [])
     retry_count = state.get("retry_count", 0)
 
+    # After first pass OR if we have evidence, go to RCA.
+    # RCA node owns the healthy-service short-circuit logic.
     if len(evidence) >= 2 or retry_count >= 1:
         logger.info(
-            f"[Router: EvidenceSufficiency] Sufficient evidence ({len(evidence)} items, retries={retry_count}) -> Proceeding to RCA."
+            f"[Router: EvidenceSufficiency] {len(evidence)} evidence items (retries={retry_count}) -> Proceeding to RCA."
         )
         return "formulate_rca"
 
     logger.warning(
-        f"[Router: EvidenceSufficiency] Insufficient evidence ({len(evidence)} items) -> Branching to expand diagnostics (retry {retry_count + 1})."
+        f"[Router: EvidenceSufficiency] {len(evidence)} evidence items -> Expanding diagnostics (retry {retry_count + 1})."
     )
     return "expand_diagnostics"
 
