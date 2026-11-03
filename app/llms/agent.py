@@ -19,8 +19,7 @@ from langchain_groq import ChatGroq
 from pydantic import SecretStr
 
 from app.config.config import get_settings
-from app.services.loki_service import LokiService
-from app.services.prometheus_service import PrometheusService
+from app.services.clients import get_loki_service, get_prometheus_service
 from app.services.qdrant_service import get_shared_qdrant_service
 from app.tools.investigation_tools import get_recent_deployments, search_past_incidents
 
@@ -69,7 +68,7 @@ async def get_live_golden_signals(service: str, window_seconds: int = 60) -> dic
     """
     window = _clamp_window(window_seconds)
     try:
-        signals = await PrometheusService().get_golden_signals(
+        signals = await get_prometheus_service().get_golden_signals(
             service=service, window_seconds=window
         )
     except Exception as exc:
@@ -86,7 +85,7 @@ async def get_live_logs(service: str, window_seconds: int = 300, limit: int = 40
     window = _clamp_window(window_seconds)
     now = datetime.now(UTC)
     try:
-        result = await LokiService().query_range(
+        result = await get_loki_service().query_range(
             logql=f'{{service="{service}"}}',
             start=now - timedelta(seconds=window),
             end=now,

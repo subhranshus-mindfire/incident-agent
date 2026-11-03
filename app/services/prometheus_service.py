@@ -7,6 +7,11 @@ from typing import Any
 import httpx
 
 from app.config.config import settings
+from app.constants.thresholds import (
+    CPU_ALERT_PCT,
+    ERROR_RATE_CRITICAL_PCT,
+    MEMORY_CRITICAL_PCT,
+)
 from app.core.http_client import get_shared_http_client
 from app.exceptions.domain import ExternalServiceException
 from app.schemas.telemetry import (
@@ -252,14 +257,14 @@ class PrometheusService:
         anomalies: list[AnomalyAlert] = []
 
         # 1. 5xx Error Rate Check (>5% warning, >15% critical)
-        if signals.error_rate_5xx_percent >= 5.0:
+        if signals.error_rate_5xx_percent >= ERROR_RATE_CRITICAL_PCT:
             severity = "critical" if signals.error_rate_5xx_percent >= 15.0 else "warning"
             anomalies.append(
                 AnomalyAlert(
                     metric_name="http_5xx_error_rate",
                     current_value=signals.error_rate_5xx_percent,
                     baseline_value=0.5,
-                    threshold_value=5.0,
+                    threshold_value=ERROR_RATE_CRITICAL_PCT,
                     is_breached=True,
                     severity=severity,
                     message=f"HTTP 5xx error rate is elevated at {signals.error_rate_5xx_percent}% (threshold: 5.0%)",
@@ -282,22 +287,22 @@ class PrometheusService:
             )
 
         # 3. CPU Saturation (>85% warning, >95% critical)
-        if signals.cpu_usage_percent >= 85.0:
+        if signals.cpu_usage_percent >= CPU_ALERT_PCT:
             severity = "critical" if signals.cpu_usage_percent >= 95.0 else "warning"
             anomalies.append(
                 AnomalyAlert(
                     metric_name="cpu_usage_percent",
                     current_value=signals.cpu_usage_percent,
                     baseline_value=30.0,
-                    threshold_value=85.0,
+                    threshold_value=CPU_ALERT_PCT,
                     is_breached=True,
                     severity=severity,
-                    message=f"CPU utilization is at {signals.cpu_usage_percent}% (threshold: 85.0%)",
+                    message=f"CPU utilization is at {signals.cpu_usage_percent}% (threshold: {CPU_ALERT_PCT}%)",
                 )
             )
 
         # 4. Memory Saturation (>85% warning, >95% critical)
-        if signals.memory_usage_percent >= 85.0:
+        if signals.memory_usage_percent >= MEMORY_CRITICAL_PCT:
             severity = "critical" if signals.memory_usage_percent >= 95.0 else "warning"
             anomalies.append(
                 AnomalyAlert(

@@ -1,6 +1,5 @@
 import logging
 from datetime import UTC, datetime
-from functools import lru_cache
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, status
@@ -12,6 +11,7 @@ from app.schemas.telemetry import (
     LogQueryResult,
     MetricQueryResult,
 )
+from app.services.clients import get_loki_service, get_prometheus_service
 from app.services.loki_service import LokiService
 from app.services.prometheus_service import PrometheusService
 
@@ -26,18 +26,6 @@ SERVICE_QUERY_PARAM = Query(
     description="Target service identifier (alphanumeric, dash, dot, underscore only)",
     examples=["checkout-service"],
 )
-
-
-@lru_cache
-def get_prometheus_service() -> PrometheusService:
-    """Returns singleton PrometheusService utilizing shared HTTP connection pool."""
-    return PrometheusService()
-
-
-@lru_cache
-def get_loki_service() -> LokiService:
-    """Returns singleton LokiService utilizing shared HTTP connection pool."""
-    return LokiService()
 
 
 @router.get("/metrics/query", response_model=MetricQueryResult, status_code=status.HTTP_200_OK)

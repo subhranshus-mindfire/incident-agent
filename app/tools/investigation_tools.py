@@ -6,6 +6,12 @@ from typing import Any
 import httpx
 
 from app.constants.service_dependencies import SERVICE_DEPENDENCIES, ServiceDependencyMap
+from app.constants.services import PRIMARY_SERVICE
+from app.constants.thresholds import (
+    CPU_CRITICAL_PCT,
+    ERROR_RATE_CRITICAL_PCT,
+    LATENCY_FAULT_MS,
+)
 from app.llms.llm_engine import get_investigation_engine
 from app.schemas.agent_state import (
     DeploymentRecord,
@@ -20,8 +26,7 @@ from app.schemas.agent_state import (
     TelemetrySummary,
 )
 from app.schemas.telemetry import GoldenSignalMetrics, LogQueryResult
-from app.services.loki_service import LokiService
-from app.services.prometheus_service import PrometheusService
+from app.services.clients import get_loki_service, get_prometheus_service
 from app.services.qdrant_service import get_shared_qdrant_service
 from app.services.remediation_service import get_remediation_executor
 
@@ -33,7 +38,7 @@ async def fetch_application_logs(
     time_range_minutes: int = 15,
 ) -> list[LogSignature]:
     """Tool 1: Returns deduplicated error log signatures from live Loki. Empty means none were found."""
-    loki = LokiService()
+    loki = get_loki_service()
     now = datetime.now(UTC)
     start_time = datetime.fromtimestamp(now.timestamp() - (time_range_minutes * 60), tz=UTC)
 
@@ -61,16 +66,16 @@ async def get_system_metrics(
     service: str,
 ) -> TelemetrySummary:
     """Tool 2: Retrieves Prometheus golden signals (error rate, latency, CPU, memory)."""
-    prom = PrometheusService()
+    prom = get_prometheus_service()
     try:
         gs = await prom.get_golden_signals(service=service)
         if isinstance(gs, GoldenSignalMetrics):
             anomalies: list[str] = []
-            if gs.error_rate_5xx_percent > 5.0:
+            if gs.error_rate_5xx_percent > ERROR_RATE_CRITICAL_PCT:
                 anomalies.append(f"High 5xx error rate: {gs.error_rate_5xx_percent:.1f}%")
-            if gs.p95_latency_ms > 1000.0:
+            if gs.p95_latency_ms > LATENCY_FAULT_MS:
                 anomalies.append(f"Elevated p95 latency: {gs.p95_latency_ms:.0f}ms")
-            if gs.cpu_usage_percent > 80.0:
+            if gs.cpu_usage_percent > CPU_CRITICAL_PCT:
                 anomalies.append(f"Severe CPU saturation: {gs.cpu_usage_percent:.1f}%")
 
             return TelemetrySummary(
@@ -97,7 +102,7 @@ async def get_system_metrics(
 
 async def get_recent_deployments(service: str) -> list[DeploymentRecord]:
     """Tool 3: Finds recent releases, image tags, and deployment timestamps for a service."""
-    if service == "payment-api":
+    if service == PRIMARY_SERVICE:
         target_url = os.getenv("PAYMENT_API_URL", "http://payment-api:8080")
         try:
             async with httpx.AsyncClient(timeout=3.0) as client:
@@ -107,7 +112,7 @@ async def get_recent_deployments(service: str) -> list[DeploymentRecord]:
                     return [
                         DeploymentRecord(
                             deployment_id=d["deployment_id"],
-                            service="payment-api",
+                            service=PRIMARY_SERVICE,
                             version=d["version"],
                             deployed_at=d["deployed_at"],
                             commit_sha=d.get("commit_sha", "unknown"),
@@ -169,7 +174,7 @@ async def execute_remediation(
     )
 
     # payment-api is the live target: success is only reported once its health confirms the fix.
-    if service == "payment-api":
+    if service == PRIMARY_SERVICE:
         return await _apply_payment_api_remediation(action_type)
 
     return await executor.execute_action(proposal, dry_run=False)
@@ -192,7 +197,7 @@ FAULT_REMEDIATIONS: dict[str, RemediationActionType] = {
 
 async def get_active_faults(service: str) -> dict[str, bool] | None:
     """Fault flags payment-api reports right now. None when the service cannot be reached."""
-    if service != "payment-api":
+    if service != PRIMARY_SERVICE:
         return None
     target_url = os.getenv("PAYMENT_API_URL", "http://payment-api:8080")
     try:

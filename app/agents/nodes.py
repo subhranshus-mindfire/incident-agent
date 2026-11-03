@@ -3,6 +3,11 @@ import logging
 from typing import Any
 
 from app.constants.enums import IncidentSeverity, IncidentStatus
+from app.constants.thresholds import (
+    CPU_CRITICAL_PCT,
+    ERROR_RATE_FAULT_PCT,
+    LATENCY_FAULT_MS,
+)
 from app.llms.llm_engine import get_investigation_engine
 from app.schemas.agent_state import (
     ApprovalStatus,
@@ -13,7 +18,7 @@ from app.schemas.agent_state import (
     RiskTier,
 )
 from app.schemas.telemetry import GoldenSignalMetrics
-from app.services.prometheus_service import PrometheusService
+from app.services.clients import get_prometheus_service
 from app.services.qdrant_service import get_shared_qdrant_service
 from app.tools.investigation_tools import (
     FAULT_REMEDIATIONS,
@@ -31,8 +36,6 @@ logger = logging.getLogger("incident_agent.agents.nodes")
 
 # Post-remediation verification: wait for the rollback to settle, then require both signals under threshold.
 _VERIFY_SETTLE_SECONDS = 5
-_STABLE_ERROR_RATE_PCT = 3.0
-_STABLE_LATENCY_MS = 1000.0
 
 
 async def node_ingest_alert(state: InvestigationState) -> dict[str, Any]:
@@ -135,13 +138,13 @@ async def node_correlate_evidence(state: InvestigationState) -> dict[str, Any]:
     # 1. Telemetry evidence
     metrics = state.get("metrics") or state.get("telemetry")
     if metrics:
-        if metrics.cpu_usage_pct > 80.0:
+        if metrics.cpu_usage_pct > CPU_CRITICAL_PCT:
             evidence_list.append(f"High CPU saturation: {metrics.cpu_usage_pct}% on {service}")
-        if metrics.http_error_rate_pct > 3.0:
+        if metrics.http_error_rate_pct > ERROR_RATE_FAULT_PCT:
             evidence_list.append(
                 f"Elevated 5xx error rate: {metrics.http_error_rate_pct}% on {service}"
             )
-        if metrics.p99_latency_seconds > 1.0:
+        if metrics.p99_latency_seconds > LATENCY_FAULT_MS / 1000:
             evidence_list.append(
                 f"Severe p99 latency degradation: {metrics.p99_latency_seconds * 1000:.0f}ms"
             )
@@ -220,9 +223,9 @@ async def node_formulate_rca(state: InvestigationState) -> dict[str, Any]:
     has_metric_anomaly = bool(
         telemetry
         and (
-            telemetry.http_error_rate_pct > 3.0
-            or telemetry.p99_latency_seconds > 1.0
-            or telemetry.cpu_usage_pct > 80.0
+            telemetry.http_error_rate_pct > ERROR_RATE_FAULT_PCT
+            or telemetry.p99_latency_seconds > LATENCY_FAULT_MS / 1000
+            or telemetry.cpu_usage_pct > CPU_CRITICAL_PCT
         )
     )
     has_error_logs = bool(logs)
@@ -413,7 +416,7 @@ async def node_verify_health(state: InvestigationState) -> dict[str, Any]:
         # Let the rollback settle, then measure only the last minute so pre-rollback errors don't count.
         await asyncio.sleep(_VERIFY_SETTLE_SECONDS)
         try:
-            current = await PrometheusService().get_golden_signals(
+            current = await get_prometheus_service().get_golden_signals(
                 service=state["service"], window_minutes=1
             )
         except Exception as exc:
@@ -434,8 +437,8 @@ async def node_verify_health(state: InvestigationState) -> dict[str, Any]:
             # With no requests in the window, the error rate is 0 by arithmetic, not by observation.
             has_traffic = current.request_rate_per_sec > 0
             within_thresholds = (
-                current.error_rate_5xx_percent < _STABLE_ERROR_RATE_PCT
-                and current.p95_latency_ms < _STABLE_LATENCY_MS
+                current.error_rate_5xx_percent < ERROR_RATE_FAULT_PCT
+                and current.p95_latency_ms < LATENCY_FAULT_MS
             )
             stabilized = has_traffic and within_thresholds
             if not has_traffic:

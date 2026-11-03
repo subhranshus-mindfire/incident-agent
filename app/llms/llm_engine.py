@@ -1,6 +1,12 @@
 import logging
 
 from app.constants.enums import IncidentSeverity
+from app.constants.thresholds import (
+    CPU_CRITICAL_PCT,
+    ERROR_RATE_CRITICAL_PCT,
+    LATENCY_FAULT_MS,
+    MEMORY_CRITICAL_PCT,
+)
 from app.schemas.agent_state import (
     InvestigationState,
     LogSignature,
@@ -40,10 +46,10 @@ class SREInvestigationEngine:
         citations: list[str] = []
 
         # 1. Telemetry signal extraction
-        high_cpu = telemetry.cpu_usage_pct >= 80.0 if telemetry else False
-        high_mem = telemetry.memory_usage_pct >= 85.0 if telemetry else False
-        high_err = telemetry.http_error_rate_pct >= 5.0 if telemetry else False
-        high_lat = telemetry.p99_latency_seconds >= 1.0 if telemetry else False
+        high_cpu = telemetry.cpu_usage_pct >= CPU_CRITICAL_PCT if telemetry else False
+        high_mem = telemetry.memory_usage_pct >= MEMORY_CRITICAL_PCT if telemetry else False
+        high_err = telemetry.http_error_rate_pct >= ERROR_RATE_CRITICAL_PCT if telemetry else False
+        high_lat = telemetry.p99_latency_seconds >= LATENCY_FAULT_MS / 1000 if telemetry else False
 
         if telemetry:
             citations.append(
