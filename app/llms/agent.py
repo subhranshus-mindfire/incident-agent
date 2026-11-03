@@ -11,6 +11,7 @@ import logging
 import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import uuid4
 
 import httpx
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
@@ -19,8 +20,11 @@ from langchain_groq import ChatGroq
 from pydantic import SecretStr
 
 from app.config.config import get_settings
+from app.config.database import async_session_factory
+from app.constants.enums import IncidentSeverity
 from app.services.chat_router import route_message
 from app.services.clients import get_loki_service, get_prometheus_service
+from app.services.investigation_service import InvestigationService, summarize_trigger
 from app.services.qdrant_service import get_shared_qdrant_service
 from app.tools.investigation_tools import get_recent_deployments, search_past_incidents
 
@@ -139,27 +143,30 @@ async def start_investigation(service: str, symptoms: str) -> dict[str, Any]:
     """Open a full incident investigation for a service. Creates an incident record, gathers evidence,
     and proposes a remediation that waits for human approval. Use only when the user asks to investigate,
     diagnose or fix a fault."""
-    base_url = os.getenv("AGENT_SELF_URL", "http://localhost:8000").rstrip("/")
-    payload = {"service": service, "symptoms": symptoms[:500], "severity": "critical"}
+    incident_id = str(uuid4())
     try:
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            res = await client.post(f"{base_url}/api/v1/investigations/trigger", json=payload)
-            res.raise_for_status()
-            body = res.json()
+        async with async_session_factory() as session:
+            investigation = InvestigationService(session=session)
+            result = await investigation.start_investigation(
+                incident_id=incident_id,
+                service=service,
+                symptoms=symptoms[:500],
+                severity=IncidentSeverity.CRITICAL,
+            )
     except Exception as exc:
         return _error(exc)
-    state = body.get("state", {})
+    summary = summarize_trigger(incident_id, service, result)
+    state = summary["state"]
     return {
-        "incident_id": body.get("incident_id"),
-        "awaiting_approval": bool(body.get("is_awaiting_approval")),
-        "root_cause": state.get("selected_hypothesis"),
-        "remediation_proposal": body.get("remediation_proposal")
-        or state.get("remediation_proposal"),
-        "log_findings": state.get("log_findings") or state.get("log_signatures") or [],
-        "metrics": state.get("metrics") or state.get("telemetry") or {},
-        "recent_deployments": state.get("deployments") or [],
-        "similar_incidents": state.get("retrieved_incidents") or [],
-        "affected_services": state.get("affected_services") or [],
+        "incident_id": incident_id,
+        "awaiting_approval": summary["is_awaiting_approval"],
+        "root_cause": state["selected_hypothesis"],
+        "remediation_proposal": summary["remediation_proposal"],
+        "log_findings": state["log_findings"],
+        "metrics": state["metrics"],
+        "recent_deployments": state["deployments"],
+        "similar_incidents": state["retrieved_incidents"],
+        "affected_services": state["affected_services"],
     }
 
 

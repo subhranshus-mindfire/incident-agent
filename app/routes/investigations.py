@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.database import get_db_session
 from app.constants.enums import IncidentSeverity
-from app.services.investigation_service import InvestigationService
+from app.services.investigation_service import InvestigationService, summarize_trigger
 
 logger = logging.getLogger("incident_agent.routes.investigations")
 
@@ -59,72 +59,7 @@ async def trigger_investigation(
         severity=payload.severity,
     )
 
-    state = result["state"]
-    is_awaiting_approval = result["is_awaiting_approval"]
-
-    # Extract telemetry/metrics — handle both Pydantic model and dict
-    metrics = state.get("metrics") or state.get("telemetry") or {}
-    metrics_out: dict[str, Any] = {}
-    if metrics:
-        if hasattr(metrics, "model_dump"):
-            metrics_out = metrics.model_dump()
-        elif isinstance(metrics, dict):
-            metrics_out = metrics
-
-    # Extract logs — list of LogSignature models or dicts
-    raw_logs = state.get("log_findings") or state.get("log_signatures") or []
-    logs_out = []
-    for log in raw_logs:
-        if hasattr(log, "model_dump"):
-            logs_out.append(log.model_dump())
-        elif isinstance(log, dict):
-            logs_out.append(log)
-
-    # Extract deployments
-    raw_deps = state.get("deployments") or []
-    deps_out = []
-    for dep in raw_deps:
-        if hasattr(dep, "model_dump"):
-            deps_out.append(dep.model_dump())
-        elif isinstance(dep, dict):
-            deps_out.append(dep)
-
-    # Extract historical incidents from Qdrant
-    raw_past = state.get("retrieved_incidents") or []
-    past_out = []
-    for inc in raw_past:
-        if hasattr(inc, "model_dump"):
-            past_out.append(inc.model_dump())
-        elif isinstance(inc, dict):
-            past_out.append(inc)
-
-    return {
-        "incident_id": incident_id,
-        "service": payload.service,
-        "status": "AWAITING_HUMAN_APPROVAL" if is_awaiting_approval else "COMPLETED",
-        "is_awaiting_approval": is_awaiting_approval,
-        "selected_hypothesis": state.get("selected_hypothesis"),
-        "remediation_proposal": state.get("remediation_proposal"),
-        "execution_result": state.get("execution_result"),
-        "verification_report": state.get("verification_report"),
-        "postmortem": state.get("postmortem"),
-        "audit_events": state.get("audit_events", []),
-        # Full telemetry for UI rendering
-        "state": {
-            "metrics": metrics_out,
-            "telemetry_summary": metrics_out,
-            "log_signatures": logs_out,
-            "log_findings": logs_out,
-            "deployments": deps_out,
-            "recent_deployments": deps_out,
-            "retrieved_incidents": past_out,
-            "historical_incidents": past_out,
-            "selected_hypothesis": state.get("selected_hypothesis"),
-            "hypotheses": state.get("hypotheses") or state.get("rca_hypotheses") or [],
-            "remediation_proposal": state.get("remediation_proposal"),
-            "affected_services": state.get("affected_services", []),
-        },
-    }
+    return summarize_trigger(incident_id, payload.service, result)
 
 
 @router.get(

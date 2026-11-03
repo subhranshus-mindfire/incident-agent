@@ -371,3 +371,49 @@ def get_investigation_service() -> InvestigationService:
     if _default_investigation_service is None:
         _default_investigation_service = InvestigationService()
     return _default_investigation_service
+
+
+def _as_dict(item: Any) -> Any:
+    """Converts a Pydantic model to a plain dict; other values pass through unchanged."""
+    return item.model_dump() if hasattr(item, "model_dump") else item
+
+
+def summarize_trigger(incident_id: str, service: str, result: dict[str, Any]) -> dict[str, Any]:
+    """Builds the JSON response for a started investigation. Shared by the HTTP route and the chat agent."""
+    state = result["state"]
+    is_awaiting_approval = result["is_awaiting_approval"]
+
+    metrics = _as_dict(state.get("metrics") or state.get("telemetry") or {})
+    metrics_out: dict[str, Any] = metrics if isinstance(metrics, dict) else {}
+    logs_out = [
+        _as_dict(log) for log in state.get("log_findings") or state.get("log_signatures") or []
+    ]
+    deps_out = [_as_dict(dep) for dep in state.get("deployments") or []]
+    past_out = [_as_dict(inc) for inc in state.get("retrieved_incidents") or []]
+
+    return {
+        "incident_id": incident_id,
+        "service": service,
+        "status": "AWAITING_HUMAN_APPROVAL" if is_awaiting_approval else "COMPLETED",
+        "is_awaiting_approval": is_awaiting_approval,
+        "selected_hypothesis": state.get("selected_hypothesis"),
+        "remediation_proposal": state.get("remediation_proposal"),
+        "execution_result": state.get("execution_result"),
+        "verification_report": state.get("verification_report"),
+        "postmortem": state.get("postmortem"),
+        "audit_events": state.get("audit_events", []),
+        "state": {
+            "metrics": metrics_out,
+            "telemetry_summary": metrics_out,
+            "log_signatures": logs_out,
+            "log_findings": logs_out,
+            "deployments": deps_out,
+            "recent_deployments": deps_out,
+            "retrieved_incidents": past_out,
+            "historical_incidents": past_out,
+            "selected_hypothesis": state.get("selected_hypothesis"),
+            "hypotheses": state.get("hypotheses") or state.get("rca_hypotheses") or [],
+            "remediation_proposal": state.get("remediation_proposal"),
+            "affected_services": state.get("affected_services", []),
+        },
+    }
