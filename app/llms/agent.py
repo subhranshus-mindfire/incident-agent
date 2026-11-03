@@ -22,6 +22,7 @@ from pydantic import SecretStr
 from app.config.config import get_settings
 from app.config.database import async_session_factory
 from app.constants.enums import IncidentSeverity
+from app.constants.service_dependencies import SERVICE_DEPENDENCIES
 from app.constants.services import PRIMARY_SERVICE
 from app.services.chat_router import route_message
 from app.services.clients import get_loki_service, get_prometheus_service
@@ -172,6 +173,20 @@ async def start_investigation(service: str, symptoms: str) -> dict[str, Any]:
 
 
 @tool
+async def get_service_dependencies(service: str) -> dict[str, Any]:
+    """Upstream services (they depend on this service) and downstream services (this service depends on),
+    from the service dependency map. Use for dependency and blast-radius questions."""
+    mapping = SERVICE_DEPENDENCIES.get(service)
+    if mapping is None:
+        return {
+            "service": service,
+            "known": False,
+            "error": "no dependency map entry for this service",
+        }
+    return {"known": True, **mapping.model_dump()}
+
+
+@tool
 async def get_service_health(service: str) -> dict[str, Any]:
     """Health endpoint status and active fault flags for a service. Works without traffic.
 
@@ -241,6 +256,7 @@ async def list_stored_incidents(
 
 
 TOOLS = [
+    get_service_dependencies,
     list_stored_incidents,
     get_service_health,
     get_live_golden_signals,
@@ -277,12 +293,13 @@ async def run_chat(message: str, history: list[dict[str, str]]) -> dict[str, Any
             "incident": None,
         }
 
-    llm = ChatGroq(
+    base_llm = ChatGroq(
         model=settings.GROQ_MODEL,
         api_key=SecretStr(settings.GROQ_API_KEY),
         temperature=0,
         max_tokens=2048,
-    ).bind_tools(TOOLS)
+    )
+    llm = base_llm.bind_tools(TOOLS)
 
     messages = _to_messages(history, message)
     incident: dict[str, Any] | None = None
@@ -322,7 +339,18 @@ async def run_chat(message: str, history: list[dict[str, str]]) -> dict[str, Any
                 ToolMessage(content=json.dumps(result, default=str), tool_call_id=call["id"])
             )
 
-    return {
-        "reply": "I could not finish the analysis within the step limit. Try a narrower question.",
-        "incident": incident,
-    }
+    # Out of tool rounds: answer from the results already gathered, without offering more tools.
+    messages.append(
+        HumanMessage(
+            content="Stop calling tools. Answer now from the tool results above, and say what is still missing."
+        )
+    )
+    try:
+        final = await base_llm.ainvoke(messages)
+    except Exception as exc:
+        logger.error(f"Final answer call failed: {exc}")
+        return {
+            "reply": "I could not finish the analysis. Try a narrower question.",
+            "incident": incident,
+        }
+    return {"reply": str(final.content), "incident": incident}

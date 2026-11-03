@@ -139,15 +139,10 @@ async def search_past_incidents(
 
 def get_service_dependencies(service: str) -> ServiceDependencyMap:
     """Tool 5: Identifies upstream and downstream dependencies and architectural impact."""
+    # Unknown services get an empty map, not invented dependencies.
     if service in SERVICE_DEPENDENCIES:
         return SERVICE_DEPENDENCIES[service]
-    return ServiceDependencyMap(
-        service=service,
-        upstream_services=["api-gateway"],
-        downstream_services=["postgres"],
-        tier="tier-2",
-        criticality="standard",
-    )
+    return ServiceDependencyMap(service=service, tier="unknown", criticality="unknown")
 
 
 async def execute_remediation(
