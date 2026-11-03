@@ -22,6 +22,7 @@ from pydantic import SecretStr
 from app.config.config import get_settings
 from app.config.database import async_session_factory
 from app.constants.enums import IncidentSeverity
+from app.constants.services import PRIMARY_SERVICE
 from app.services.chat_router import route_message
 from app.services.clients import get_loki_service, get_prometheus_service
 from app.services.investigation_service import InvestigationService, summarize_trigger
@@ -176,7 +177,7 @@ async def get_service_health(service: str) -> dict[str, Any]:
 
     Use this first to decide whether a service is up. Zero traffic does not mean healthy.
     """
-    if service != "payment-api":
+    if service != PRIMARY_SERVICE:
         return {"service": service, "error": "no health endpoint is configured for this service"}
     target_url = os.getenv("PAYMENT_API_URL", "http://payment-api:8080")
     try:
