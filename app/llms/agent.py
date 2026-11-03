@@ -325,7 +325,8 @@ async def run_chat(message: str, history: list[dict[str, str]]) -> dict[str, Any
         max_tokens=MAX_OUTPUT_TOKENS,
         max_retries=MAX_PROVIDER_RETRIES,
         # Short answers do not need deep reasoning, and reasoning tokens count against the per-minute budget.
-        reasoning_effort="low",
+        # Only the OpenAI-hosted models accept reasoning_effort; others reject the request.
+        reasoning_effort="low" if settings.GROQ_MODEL.startswith("openai/") else None,
     )
     llm = base_llm.bind_tools(TOOLS)
 
