@@ -1,6 +1,7 @@
 import httpx
 import pytest
 
+from app.agents import nodes
 from app.constants.enums import IncidentSeverity, IncidentStatus
 from app.llms.llm_engine import SREInvestigationEngine
 from app.schemas.agent_state import (
@@ -29,6 +30,59 @@ def executor() -> RemediationExecutor:
 @pytest.fixture
 def investigation_service() -> InvestigationService:
     return InvestigationService()
+
+
+class FakeMemory:
+    """Stands in for Qdrant: records what would have been written, and never touches live collections."""
+
+    def __init__(self) -> None:
+        self.persisted: list[dict[str, object]] = []
+
+    async def search_runbooks(self, *args: object, **kwargs: object) -> list[object]:
+        return []
+
+    async def get_runbook(self, runbook_id: str) -> None:
+        return None
+
+    async def persist_resolved_incident(self, **kwargs: object) -> None:
+        self.persisted.append(dict(kwargs))
+
+
+@pytest.fixture(autouse=True)
+def offline_observability(monkeypatch: pytest.MonkeyPatch) -> FakeMemory:
+    """Fixed telemetry, logs and memory, so these tests run without Prometheus, Loki or Qdrant."""
+    faulty = TelemetrySummary(
+        http_error_rate_pct=40.0,
+        p99_latency_seconds=2.4,
+        request_rate_per_sec=10.0,
+        cpu_usage_pct=20.0,
+        memory_usage_pct=30.0,
+        detected_anomalies=["High 5xx error rate: 40.0%"],
+    )
+    memory = FakeMemory()
+
+    async def fake_metrics(service: str) -> TelemetrySummary:
+        return faulty
+
+    async def fake_logs(service: str, time_range_minutes: int = 15) -> list[LogSignature]:
+        return [LogSignature(sample_line="connection pool exhausted (max 50)", count=7)]
+
+    async def fake_deployments(service: str) -> list[object]:
+        return []
+
+    async def fake_past(query: str, service: str | None = None, limit: int = 3) -> list[object]:
+        return []
+
+    async def fake_active_faults(service: str) -> None:
+        return None
+
+    monkeypatch.setattr(nodes, "get_system_metrics", fake_metrics)
+    monkeypatch.setattr(nodes, "fetch_application_logs", fake_logs)
+    monkeypatch.setattr(nodes, "get_recent_deployments", fake_deployments)
+    monkeypatch.setattr(nodes, "search_past_incidents", fake_past)
+    monkeypatch.setattr(nodes, "get_active_faults", fake_active_faults)
+    monkeypatch.setattr(nodes, "get_shared_qdrant_service", lambda: memory)
+    return memory
 
 
 def test_rca_hypotheses_generation(engine: SREInvestigationEngine):
@@ -114,9 +168,25 @@ async def test_remediation_executor(executor: RemediationExecutor):
 
 
 @pytest.mark.asyncio
-async def test_langgraph_autonomous_flow_auto_approved(investigation_service: InvestigationService):
+async def test_langgraph_autonomous_flow_auto_approved(
+    investigation_service: InvestigationService, monkeypatch: pytest.MonkeyPatch
+):
     """Tests full end-to-end autonomous flow for auto-approved remediation (low risk)."""
     incident_id = "00000000-0000-0000-0000-000000000010"
+
+    # A CPU-saturation scenario, so the top hypothesis is a low-risk scale-up.
+    cpu_saturated = TelemetrySummary(
+        cpu_usage_pct=92.0,
+        memory_usage_pct=45.0,
+        http_error_rate_pct=0.5,
+        p99_latency_seconds=0.2,
+        request_rate_per_sec=10.0,
+    )
+
+    async def fake_metrics(service: str) -> TelemetrySummary:
+        return cpu_saturated
+
+    monkeypatch.setattr(nodes, "get_system_metrics", fake_metrics)
 
     result = await investigation_service.start_investigation(
         incident_id=incident_id,
