@@ -3,7 +3,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, status
 from pydantic import BaseModel, Field
 
-from app.llms.agent import run_chat
+from app.agents.chat_agent import run_chat
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 

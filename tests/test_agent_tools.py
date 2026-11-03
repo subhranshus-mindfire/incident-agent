@@ -3,7 +3,8 @@ import pytest
 from groq import BadRequestError
 from langchain_core.messages import AIMessage
 
-from app.llms.agent import _invoke_model, get_service_dependencies
+from app.agents.chat_agent import _invoke_model
+from app.tools.chat_tools import get_service_dependencies
 from app.tools.investigation_tools import get_service_dependencies as dependency_map
 
 
@@ -60,7 +61,7 @@ async def test_model_call_gives_up_after_repeated_unknown_tool_names() -> None:
 
 
 def test_message_text_reads_plain_and_block_content() -> None:
-    from app.llms.agent import _message_text
+    from app.agents.chat_agent import _message_text
 
     assert _message_text(AIMessage(content="plain")) == "plain"
     blocks = AIMessage(
@@ -70,7 +71,7 @@ def test_message_text_reads_plain_and_block_content() -> None:
 
 
 def test_chat_prompt_loads_from_yaml() -> None:
-    from app.llms.agent import CHAT_SYSTEM_PROMPT
+    from app.agents.chat_agent import CHAT_SYSTEM_PROMPT
 
     assert "get_service_health" in CHAT_SYSTEM_PROMPT
     assert "Never invent a tool name" in CHAT_SYSTEM_PROMPT
@@ -85,3 +86,11 @@ def test_prompt_loader_rejects_a_file_without_system_text(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="system"):
         loader.load_prompt("broken")
     loader.load_prompt.cache_clear()
+
+
+async def test_service_argument_accepts_common_small_model_shapes() -> None:
+    expected = ["api-gateway", "mobile-app"]
+    as_dict = await get_service_dependencies.ainvoke({"service": {"name": "order-service"}})
+    as_list = await get_service_dependencies.ainvoke({"service": ["order-service"]})
+    assert as_dict["known"] is True and as_list["known"] is True
+    assert as_dict["upstream_services"] == expected

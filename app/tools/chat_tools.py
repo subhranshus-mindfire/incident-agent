@@ -1,40 +1,25 @@
-"""Tool-calling chat agent.
-
-The model decides which live tool to call; every fact in its answer must come from a tool result.
-Tools that cannot reach their data source return an explicit error, never invented values.
-"""
+"""Tools the chat agent can call. Each reads live data or starts an investigation."""
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Annotated, Any
 from uuid import uuid4
 
 import httpx
-from groq import BadRequestError
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
+from pydantic import BeforeValidator
 
-from app.config.config import get_settings
 from app.config.database import async_session_factory
 from app.constants.enums import IncidentSeverity
 from app.constants.live import MAX_WINDOW_SECONDS, MIN_WINDOW_SECONDS
 from app.constants.llm import (
-    MAX_HISTORY_CHARS,
-    MAX_HISTORY_TURNS,
     MAX_LIST_ROWS,
-    MAX_OUTPUT_TOKENS,
-    MAX_TOOL_CALL_ATTEMPTS,
-    MAX_TOOL_ROUNDS,
 )
 from app.constants.service_dependencies import SERVICE_DEPENDENCIES
 from app.constants.services import PRIMARY_SERVICE
-from app.llms.providers import ProviderNotConfiguredError, build_chat_model, is_rate_limit_error
-from app.prompts.loader import load_prompt
-from app.services.chat_router import route_message
 from app.services.clients import get_loki_service, get_prometheus_service
 from app.services.investigation_service import InvestigationService, summarize_trigger
 from app.services.qdrant_service import get_shared_qdrant_service
@@ -42,14 +27,26 @@ from app.tools.investigation_tools import get_recent_deployments, search_past_in
 from app.utils.errors import error_payload
 from app.utils.time import clamp_seconds
 
-logger = logging.getLogger("incident_agent.llms.agent")
+logger = logging.getLogger("incident_agent.tools.chat_tools")
 
 
-CHAT_SYSTEM_PROMPT = load_prompt("chat_agent")
+def _coerce_service(value: object) -> str:
+    """Small models sometimes send the service as an object, such as {"name": "order-service"}, or a list.
+
+    Extracts the first string so the call still reaches the right service.
+    """
+    if isinstance(value, dict):
+        value = next((v for v in value.values() if isinstance(v, str)), "")
+    elif isinstance(value, list):
+        value = next((v for v in value if isinstance(v, str)), "")
+    return str(value).strip()
+
+
+ServiceName = Annotated[str, BeforeValidator(_coerce_service)]
 
 
 @tool
-async def get_live_golden_signals(service: str, window_seconds: int = 60) -> dict[str, Any]:
+async def get_live_golden_signals(service: ServiceName, window_seconds: int = 60) -> dict[str, Any]:
     """Live Prometheus golden signals for a service over the last window_seconds (10 to 3600).
 
     Returns 5xx error rate (percent), request rate (per second), p95 latency (ms) and CPU (percent).
@@ -66,7 +63,9 @@ async def get_live_golden_signals(service: str, window_seconds: int = 60) -> dic
 
 
 @tool
-async def get_live_logs(service: str, window_seconds: int = 300, limit: int = 15) -> dict[str, Any]:
+async def get_live_logs(
+    service: ServiceName, window_seconds: int = 300, limit: int = 15
+) -> dict[str, Any]:
     """Real Loki log lines for a service over the last window_seconds, newest first.
 
     An empty list means Loki has no lines for that service in the window.
@@ -98,7 +97,7 @@ async def get_live_logs(service: str, window_seconds: int = 300, limit: int = 15
 
 
 @tool
-async def get_deployments(service: str) -> dict[str, Any]:
+async def get_deployments(service: ServiceName) -> dict[str, Any]:
     """Recent deployments (version, status, time) for a service, from the deployment API."""
     try:
         records = await get_recent_deployments(service)
@@ -123,7 +122,7 @@ async def search_incident_memory(query: str) -> dict[str, Any]:
 
 
 @tool
-async def start_investigation(service: str, symptoms: str) -> dict[str, Any]:
+async def start_investigation(service: ServiceName, symptoms: str) -> dict[str, Any]:
     """Open a full incident investigation for a service. Creates an incident record, gathers evidence,
     and proposes a remediation that waits for human approval. Use only when the user asks to investigate,
     diagnose or fix a fault."""
@@ -155,7 +154,7 @@ async def start_investigation(service: str, symptoms: str) -> dict[str, Any]:
 
 
 @tool
-async def get_service_dependencies(service: str) -> dict[str, Any]:
+async def get_service_dependencies(service: ServiceName) -> dict[str, Any]:
     """Upstream services (they depend on this service) and downstream services (this service depends on),
     from the service dependency map. Use for dependency and blast-radius questions."""
     mapping = SERVICE_DEPENDENCIES.get(service)
@@ -169,7 +168,7 @@ async def get_service_dependencies(service: str) -> dict[str, Any]:
 
 
 @tool
-async def get_service_health(service: str) -> dict[str, Any]:
+async def get_service_health(service: ServiceName) -> dict[str, Any]:
     """Health endpoint status and active fault flags for a service. Works without traffic.
 
     Use this first to decide whether a service is up. Zero traffic does not mean healthy.
@@ -188,7 +187,7 @@ async def get_service_health(service: str) -> dict[str, Any]:
 
 @tool
 async def list_stored_incidents(
-    service: str = "", status: str = "", limit: int = 20
+    service: ServiceName = "", status: str = "", limit: int = 20
 ) -> dict[str, Any]:
     """List stored incidents, newest first, with ID, title, service, status and dates.
 
@@ -248,121 +247,3 @@ TOOLS = [
     start_investigation,
 ]
 _TOOLS_BY_NAME = {t.name: t for t in TOOLS}
-
-
-def _message_text(message: BaseMessage) -> str:
-    """Plain text of a model reply. Gemini returns a list of content blocks; Groq returns a string."""
-    content = message.content
-    if isinstance(content, str):
-        return content
-    return "".join(
-        block.get("text", "")
-        for block in content
-        if isinstance(block, dict) and block.get("type") == "text"
-    )
-
-
-def _is_unknown_tool_error(exc: BadRequestError) -> bool:
-    text = str(exc)
-    return "tool_use_failed" in text or "tool call validation failed" in text
-
-
-async def _invoke_model(llm: Any, messages: list[BaseMessage]) -> AIMessage:
-    """Calls the model. Retries when it names a tool that does not exist, which the provider rejects."""
-    for attempt in range(1, MAX_TOOL_CALL_ATTEMPTS + 1):
-        try:
-            response: AIMessage = await llm.ainvoke(messages)
-            return response
-        except BadRequestError as exc:
-            if not _is_unknown_tool_error(exc) or attempt == MAX_TOOL_CALL_ATTEMPTS:
-                raise
-            logger.warning(f"Model called an unknown tool (attempt {attempt}); retrying: {exc}")
-    raise RuntimeError("unreachable: the loop returns or raises")
-
-
-def _to_messages(history: list[dict[str, str]], message: str) -> list[BaseMessage]:
-    messages: list[BaseMessage] = [SystemMessage(content=CHAT_SYSTEM_PROMPT)]
-    for item in history[-MAX_HISTORY_TURNS:]:
-        if item.get("role") == "assistant":
-            messages.append(AIMessage(content=item.get("content", "")[:MAX_HISTORY_CHARS]))
-        else:
-            messages.append(HumanMessage(content=item.get("content", "")[:MAX_HISTORY_CHARS]))
-    messages.append(HumanMessage(content=message))
-    return messages
-
-
-async def run_chat(message: str, history: list[dict[str, str]]) -> dict[str, Any]:
-    """Runs one chat turn: fixed or live answers first, otherwise the model calls tools and answers from them."""
-    routed = await route_message(message, history)
-    if routed.reply is not None:
-        return {"reply": routed.reply, "incident": None}
-    message = routed.text
-
-    try:
-        base_llm = build_chat_model(get_settings(), max_output_tokens=MAX_OUTPUT_TOKENS)
-    except ProviderNotConfiguredError as exc:
-        return {
-            "reply": f"The language model is not configured: {exc}. Set it in .env and restart the app.",
-            "incident": None,
-        }
-    llm = base_llm.bind_tools(TOOLS)
-
-    messages = _to_messages(history, message)
-    incident: dict[str, Any] | None = None
-
-    for _ in range(MAX_TOOL_ROUNDS):
-        try:
-            ai_message = await _invoke_model(llm, messages)
-        except Exception as exc:
-            if is_rate_limit_error(exc):
-                logger.warning(f"Language model rate limit reached: {exc}")
-                return {
-                    "reply": "The language model's usage limit is reached. Wait a while and ask again.",
-                    "incident": incident,
-                }
-            logger.error(f"Language model call failed: {exc}")
-            return {
-                "reply": "The language model could not process this request. "
-                "Ask a narrower question, for example about one service or a shorter time window.",
-                "incident": incident,
-            }
-        messages.append(ai_message)
-        if not ai_message.tool_calls:
-            return {"reply": _message_text(ai_message), "incident": incident}
-
-        for call in ai_message.tool_calls:
-            tool_fn = _TOOLS_BY_NAME.get(call["name"])
-            if tool_fn is None:
-                result: Any = {"error": f"unknown tool {call['name']}"}
-            else:
-                try:
-                    result = await tool_fn.ainvoke(call["args"])
-                except Exception as exc:  # a bad tool call must not end the whole turn
-                    logger.warning(f"Tool {call['name']} failed: {exc}")
-                    result = error_payload(exc)
-            if (
-                call["name"] == "start_investigation"
-                and isinstance(result, dict)
-                and result.get("incident_id")
-            ):
-                incident = result
-                result = {k: v for k, v in result.items() if k != "incident_id"}
-            messages.append(
-                ToolMessage(content=json.dumps(result, default=str), tool_call_id=call["id"])
-            )
-
-    # Out of tool rounds: answer from the results already gathered, without offering more tools.
-    messages.append(
-        HumanMessage(
-            content="Stop calling tools. Answer now from the tool results above, and say what is still missing."
-        )
-    )
-    try:
-        final = await base_llm.ainvoke(messages)
-    except Exception as exc:
-        logger.error(f"Final answer call failed: {exc}")
-        return {
-            "reply": "I could not finish the analysis. Try a narrower question.",
-            "incident": incident,
-        }
-    return {"reply": _message_text(final), "incident": incident}

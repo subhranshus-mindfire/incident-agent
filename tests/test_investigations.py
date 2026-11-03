@@ -3,7 +3,7 @@ import pytest
 
 from app.agents import nodes
 from app.constants.enums import IncidentSeverity, IncidentStatus
-from app.llms.llm_engine import SREInvestigationEngine
+from app.rca.engine import SREInvestigationEngine
 from app.schemas.agent_state import (
     ApprovalStatus,
     LogSignature,

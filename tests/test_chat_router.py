@@ -2,8 +2,8 @@ from datetime import UTC, datetime
 
 import pytest
 
+from app.agents.router import greeting_reply, resolve_follow_up, route_message
 from app.schemas.telemetry import GoldenSignalMetrics
-from app.services.chat_router import greeting_reply, resolve_follow_up, route_message
 from app.services.live_status import (
     HealthProbe,
     LiveRequest,

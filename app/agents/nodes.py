@@ -12,7 +12,7 @@ from app.constants.thresholds import (
     ERROR_RATE_FAULT_PCT,
     LATENCY_FAULT_MS,
 )
-from app.llms.llm_engine import get_investigation_engine
+from app.rca.engine import get_investigation_engine
 from app.schemas.agent_state import (
     ApprovalStatus,
     HealthVerificationReport,
