@@ -75,6 +75,19 @@ _FOLLOWUP_FIX_PATTERN: Final = re.compile(
 )
 _KNOWN_SERVICES: Final = ("payment-api", "order-service", "auth-service")
 _REPEATED_LETTERS: Final = re.compile(r"(.)\1+")
+# A short yes after a reply that is waiting for approval. Approval is a human action in the console.
+_AFFIRMATIVE_PATTERN: Final = re.compile(
+    r"^(?:yes|yep|yeah|yup|ok|okay|sure|approve|approved|proceed|confirm)[.!]*$", re.IGNORECASE
+)
+_APPROVAL_WAITING_MARKERS: Final = (
+    "awaiting human approval",
+    "approval needed",
+    "awaiting approval",
+)
+APPROVAL_REPLY: Final = (
+    "This remediation needs an operator's approval. Use **Approve & execute** on the approval card "
+    "below the chat. I can't approve or run remediation from chat."
+)
 
 
 @dataclass(frozen=True)
@@ -112,7 +125,17 @@ def greeting_reply(text: str) -> str | None:
     return None
 
 
+def _awaiting_approval(history: list[dict[str, str]]) -> bool:
+    last_reply = next(
+        (turn["content"] for turn in reversed(history) if turn["role"] == "assistant"), ""
+    )
+    return any(marker in last_reply.lower() for marker in _APPROVAL_WAITING_MARKERS)
+
+
 async def route_message(message: str, history: list[dict[str, str]]) -> RoutedMessage:
+    if _AFFIRMATIVE_PATTERN.match(message.strip()) and _awaiting_approval(history):
+        return RoutedMessage(text=message.strip(), reply=APPROVAL_REPLY)
+
     text = resolve_follow_up(message.strip(), history)
 
     greeting = greeting_reply(text)

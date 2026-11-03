@@ -164,3 +164,17 @@ def test_golden_table_uses_shared_thresholds_with_traffic() -> None:
     table = golden_table(signals(rate=5, error_pct=4.0, p95_ms=600, cpu=10))
     assert "🟡 4.0%" in table  # between the fault (3%) and critical (5%) levels
     assert "🟡 600.0ms" in table  # between warn (500 ms) and fault (1000 ms)
+
+
+async def test_yes_after_awaiting_approval_points_to_the_console() -> None:
+    history = [
+        {"role": "assistant", "content": "Status: 🔒 Awaiting human approval for remediation."}
+    ]
+    routed = await route_message("Yes", history)
+    assert routed.reply is not None
+    assert "Approve & execute" in routed.reply
+
+
+async def test_yes_without_pending_approval_goes_to_the_agent() -> None:
+    routed = await route_message("Yes", [{"role": "assistant", "content": "Hello there."}])
+    assert routed.reply is None
