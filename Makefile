@@ -1,4 +1,4 @@
-.PHONY: help setup install-hooks lint format typecheck audit test up down logs chaos-deadlock chaos-bad-deploy chaos-cpu-burn chaos-traffic chaos-rollback chaos-clear chaos-health ui clean
+.PHONY: help setup install-hooks lint format typecheck audit test up down logs chaos-deadlock chaos-bad-deploy chaos-cpu-burn chaos-traffic chaos-rollback chaos-clear chaos-health reindex ui clean
 
 help:
 	@echo "Incident Investigation Agent - Developer Commands"
@@ -12,6 +12,7 @@ help:
 	@echo "  make up             Start all services with Docker Compose"
 	@echo "  make down           Stop all Docker Compose services"
 	@echo "  make logs           View application container logs"
+	@echo "  make reindex        Re-embed runbooks and incidents after changing EMBEDDING_MODEL"
 	@echo "  make chaos-deadlock     Inject a DB deadlock fault into payment-api"
 	@echo "  make chaos-bad-deploy   Inject a bad-deployment regression (DEP-101)"
 	@echo "  make chaos-cpu-burn     Inject CPU saturation"
@@ -72,6 +73,9 @@ chaos-clear:
 
 chaos-health:
 	$(CHAOS) --scenario health
+
+reindex:
+	docker compose exec app python -m app.services.reindex
 
 ui:
 	docker compose up -d ui

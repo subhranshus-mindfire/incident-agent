@@ -15,6 +15,11 @@ from app.services.embedding_service import EmbeddingService, get_embedding_servi
 logger = logging.getLogger("incident_agent.qdrant_service")
 
 
+def incident_document_text(service: str, symptoms: str, root_cause: str, remediation: str) -> str:
+    """The text that represents an incident in the index. Changing it means re-indexing."""
+    return f"Service: {service} | Symptoms: {symptoms} | Root Cause: {root_cause} | Remediation: {remediation}"
+
+
 class QdrantService:
     """Enterprise vector store adapter for Qdrant.
 
@@ -122,7 +127,7 @@ class QdrantService:
         """Indexes or updates a runbook in Qdrant with its dense vector and payload."""
         try:
             searchable_text = self._prepare_search_text(runbook)
-            vector = await self._embedding_service.embed_text(searchable_text)
+            vector = await self._embedding_service.embed_document(searchable_text)
 
             payload: dict[str, Any] = runbook.model_dump(mode="json")
             payload["_searchable_snippet"] = searchable_text[:500]
@@ -312,11 +317,10 @@ class QdrantService:
         """Seeds default historical incidents into Qdrant."""
         points: list[models.PointStruct] = []
         for inc in DEFAULT_HISTORICAL_INCIDENTS:
-            text = (
-                f"Service: {inc.service} | Symptoms: {inc.symptoms} | "
-                f"Root Cause: {inc.root_cause} | Remediation: {inc.remediation}"
+            text = incident_document_text(
+                inc.service, inc.symptoms, inc.root_cause, inc.remediation
             )
-            vector = await self._embedding_service.embed_text(text)
+            vector = await self._embedding_service.embed_document(text)
             points.append(
                 models.PointStruct(
                     id=inc.id,
@@ -416,6 +420,39 @@ class QdrantService:
             logger.warning(f"Error searching historical incidents in Qdrant: {exc}")
             return []
 
+    async def reembed_historical_incidents(self) -> int:
+        """Re-embeds every stored incident from its payload. Used after changing the embedding model."""
+        if not await self._client.collection_exists(self.incidents_collection):
+            return 0
+        count = 0
+        offset = None
+        while True:
+            points, offset = await self._client.scroll(
+                collection_name=self.incidents_collection,
+                limit=100,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            updated: list[models.PointStruct] = []
+            for point in points:
+                payload = point.payload or {}
+                text = incident_document_text(
+                    str(payload.get("service", "")),
+                    str(payload.get("symptoms", "")),
+                    str(payload.get("root_cause", "")),
+                    str(payload.get("remediation", "")),
+                )
+                vector = await self._embedding_service.embed_document(text)
+                updated.append(models.PointStruct(id=point.id, vector=vector, payload=payload))
+            if updated:
+                await self._client.upsert(
+                    collection_name=self.incidents_collection, points=updated, wait=True
+                )
+                count += len(updated)
+            if offset is None:
+                return count
+
     async def persist_resolved_incident(
         self,
         incident_id: str,
@@ -433,11 +470,8 @@ class QdrantService:
             if self.is_valid_uuid(incident_id)
             else str(uuid.uuid5(uuid.NAMESPACE_DNS, incident_id))
         )
-        text = (
-            f"Service: {service} | Symptoms: {symptoms} | "
-            f"Root Cause: {root_cause} | Remediation: {remediation}"
-        )
-        vector = await self._embedding_service.embed_text(text)
+        text = incident_document_text(service, symptoms, root_cause, remediation)
+        vector = await self._embedding_service.embed_document(text)
 
         point = models.PointStruct(
             id=point_id,
