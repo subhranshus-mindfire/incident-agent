@@ -202,10 +202,14 @@ class PrometheusService:
         self,
         service: str,
         window_minutes: int = 15,
+        window_seconds: int | None = None,
     ) -> GoldenSignalMetrics:
-        """Computes Google SRE Golden Signals for a given service."""
+        """Computes Google SRE Golden Signals for a given service.
+
+        `window_seconds`, when given, overrides `window_minutes` for live, short-range questions.
+        """
         safe_service = self._validate_service(service)
-        window = f"{window_minutes}m"
+        window = f"{window_seconds}s" if window_seconds else f"{window_minutes}m"
 
         # Injection-safe PromQL queries for Golden Signals
         err_query = (
