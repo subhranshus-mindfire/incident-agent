@@ -54,6 +54,9 @@ chaos-clear:
 chaos-health:
 	python3 -m simulation.run_chaos --scenario health
 
+ui:
+	docker compose up -d ui
+
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	find . -type d -name ".pytest_cache" -exec rm -rf {} +

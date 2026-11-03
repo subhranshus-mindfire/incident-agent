@@ -1,0 +1,47 @@
+import json
+import logging
+from typing import Any
+import urllib.error
+import urllib.request
+
+logger = logging.getLogger("incident_agent.ui.helpers")
+
+
+def api_request(
+    method: str, url: str, data: dict[str, Any] | None = None, timeout: float = 8.0
+) -> tuple[int, Any]:
+    """Universal HTTP requester with robust JSON and error handling."""
+    req = urllib.request.Request(url, method=method)
+    req.add_header("User-Agent", "IncidentAgent-StreamlitUI/1.0")
+    body = None
+    if data is not None:
+        body = json.dumps(data).encode("utf-8")
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, data=body, timeout=timeout) as response:
+            status_code = response.getcode()
+            content = response.read().decode("utf-8")
+            try:
+                parsed = json.loads(content)
+            except Exception:
+                parsed = content
+            return status_code, parsed
+    except urllib.error.HTTPError as err:
+        content = err.read().decode("utf-8")
+        try:
+            parsed = json.loads(content)
+        except Exception:
+            parsed = {"error": content}
+        return err.code, parsed
+    except Exception as exc:
+        return 500, {"error": str(exc)}
+
+
+def ping_endpoint(url: str, timeout: float = 2.0) -> bool:
+    """Checks if a target URL responds with 2xx/3xx."""
+    try:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return response.getcode() in (200, 204, 301, 302)
+    except Exception:
+        return False

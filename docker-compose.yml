@@ -171,9 +171,33 @@ services:
     volumes:
       - ./app:/workspace/app
       - ./simulation:/workspace/simulation
+      - ./ui:/workspace/ui
       - ./tests:/workspace/tests
       - ./pyproject.toml:/workspace/pyproject.toml
     command: ["pytest", "-v", "tests/"]
+    networks:
+      - incident-network
+
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: incident-agent-ui
+    restart: unless-stopped
+    command: ["streamlit", "run", "ui/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+    ports:
+      - "8501:8501"
+    environment:
+      - AGENT_API_URL=http://app:8000
+      - PROMETHEUS_URL=http://prometheus:9090
+      - LOKI_URL=http://loki:3100
+      - PAYMENT_API_URL=http://payment-api:8080
+    depends_on:
+      app:
+        condition: service_healthy
+    volumes:
+      - ./ui:/workspace/ui
+      - ./simulation:/workspace/simulation
     networks:
       - incident-network
 
