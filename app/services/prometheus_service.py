@@ -324,5 +324,6 @@ class PrometheusService:
             client = self._get_client()
             res = await client.get(f"{self.base_url}/-/healthy", timeout=3.0)
             return res.status_code == 200
-        except Exception:
+        except httpx.HTTPError as exc:
+            logger.debug("Prometheus health check failed: %s", exc)
             return False

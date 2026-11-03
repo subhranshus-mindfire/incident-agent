@@ -290,5 +290,6 @@ class LokiService:
             client = self._get_client()
             res = await client.get(f"{self.base_url}/ready", timeout=3.0)
             return res.status_code == 200
-        except Exception:
+        except httpx.HTTPError as exc:
+            logger.debug("Loki health check failed: %s", exc)
             return False

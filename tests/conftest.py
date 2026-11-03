@@ -9,7 +9,9 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.config.database import Base, get_db_session
+from app.core.http_client import close_shared_http_client
 from app.main import app
+from app.services import clients
 
 # Isolated in-memory async SQLite engine for lightning-fast testing
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -56,3 +58,14 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
         yield async_client
 
     app.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def fresh_shared_clients() -> AsyncGenerator[None, None]:
+    """Shared HTTP clients are bound to the event loop that created them, so each test builds its own."""
+    clients.get_prometheus_service.cache_clear()
+    clients.get_loki_service.cache_clear()
+    yield
+    await close_shared_http_client()
+    clients.get_prometheus_service.cache_clear()
+    clients.get_loki_service.cache_clear()
