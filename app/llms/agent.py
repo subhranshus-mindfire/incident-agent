@@ -14,6 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 import httpx
+from groq import RateLimitError
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from langchain_groq import ChatGroq
@@ -33,6 +34,10 @@ from app.tools.investigation_tools import get_recent_deployments, search_past_in
 logger = logging.getLogger("incident_agent.llms.agent")
 
 MAX_TOOL_ROUNDS = 6
+MAX_OUTPUT_TOKENS = 1024
+MAX_PROVIDER_RETRIES = 5
+MAX_HISTORY_TURNS = 6
+MAX_HISTORY_CHARS = 600
 MAX_LIST_ROWS = 25
 MAX_WINDOW_SECONDS = 3600
 
@@ -84,7 +89,7 @@ async def get_live_golden_signals(service: str, window_seconds: int = 60) -> dic
 
 
 @tool
-async def get_live_logs(service: str, window_seconds: int = 300, limit: int = 40) -> dict[str, Any]:
+async def get_live_logs(service: str, window_seconds: int = 300, limit: int = 15) -> dict[str, Any]:
     """Real Loki log lines for a service over the last window_seconds, newest first.
 
     An empty list means Loki has no lines for that service in the window.
@@ -270,11 +275,11 @@ _TOOLS_BY_NAME = {t.name: t for t in TOOLS}
 
 def _to_messages(history: list[dict[str, str]], message: str) -> list[BaseMessage]:
     messages: list[BaseMessage] = [SystemMessage(content=SYSTEM_PROMPT)]
-    for item in history:
+    for item in history[-MAX_HISTORY_TURNS:]:
         if item.get("role") == "assistant":
-            messages.append(AIMessage(content=item.get("content", "")))
+            messages.append(AIMessage(content=item.get("content", "")[:MAX_HISTORY_CHARS]))
         else:
-            messages.append(HumanMessage(content=item.get("content", "")))
+            messages.append(HumanMessage(content=item.get("content", "")[:MAX_HISTORY_CHARS]))
     messages.append(HumanMessage(content=message))
     return messages
 
@@ -297,7 +302,10 @@ async def run_chat(message: str, history: list[dict[str, str]]) -> dict[str, Any
         model=settings.GROQ_MODEL,
         api_key=SecretStr(settings.GROQ_API_KEY),
         temperature=0,
-        max_tokens=2048,
+        max_tokens=MAX_OUTPUT_TOKENS,
+        max_retries=MAX_PROVIDER_RETRIES,
+        # Short answers do not need deep reasoning, and reasoning tokens count against the per-minute budget.
+        reasoning_effort="low",
     )
     llm = base_llm.bind_tools(TOOLS)
 
@@ -307,10 +315,16 @@ async def run_chat(message: str, history: list[dict[str, str]]) -> dict[str, Any
     for _ in range(MAX_TOOL_ROUNDS):
         try:
             ai_message = await llm.ainvoke(messages)
-        except Exception as exc:  # e.g. rate limits or oversized requests from the model provider
+        except RateLimitError as exc:
+            logger.warning(f"Language model rate limit reached: {exc}")
+            return {
+                "reply": "The language model's per-minute limit is reached. Wait about a minute and ask again.",
+                "incident": incident,
+            }
+        except Exception as exc:  # oversized requests or provider outages
             logger.error(f"Language model call failed: {exc}")
             return {
-                "reply": "The language model could not process this request (provider limit or error). "
+                "reply": "The language model could not process this request. "
                 "Ask a narrower question, for example about one service or a shorter time window.",
                 "incident": incident,
             }
