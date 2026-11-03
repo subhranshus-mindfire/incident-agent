@@ -13,7 +13,6 @@ import re
 import time
 from collections.abc import Generator
 from typing import Any
-from urllib.parse import urlencode
 
 from ui.helpers import api_request, ping_endpoint
 
@@ -214,153 +213,6 @@ def _close_stale_gate() -> None:
     st.rerun()
 
 
-def _status_label(value: float, warn: float, crit: float, unit: str = "") -> str:
-    if value >= crit:
-        return f"🔴 {value:.1f}{unit}"
-    if value >= warn:
-        return f"🟡 {value:.1f}{unit}"
-    return f"🟢 {value:.1f}{unit}"
-
-
-# ---------------------------------------------------------------------------
-# Intent Detection — Don't trigger the LangGraph agent for chit-chat
-# ---------------------------------------------------------------------------
-_INVESTIGATION_KEYWORDS = {
-    "investigate",
-    "check",
-    "diagnose",
-    "debug",
-    "error",
-    "fault",
-    "issue",
-    "incident",
-    "500",
-    "latency",
-    "timeout",
-    "crash",
-    "payment",
-    "api",
-    "deployment",
-    "deploy",
-    "rollback",
-    "metric",
-    "log",
-    "prometheus",
-    "loki",
-    "qdrant",
-    "blast",
-    "root cause",
-    "rca",
-    "remediat",
-    "chaos",
-    "deadlock",
-    "connection pool",
-    "cpu",
-    "memory",
-    "service",
-    "health",
-    "down",
-    "slow",
-    "failure",
-    "alert",
-    "outage",
-}
-
-_GREETING_RESPONSES: dict[str, str] = {
-    "hi": "👋 Hey! I'm your incident investigation assistant. Tell me about a service issue or pick one of the suggested queries to get started.",
-    "hello": "👋 Hello! I'm ready to investigate incidents. Describe a symptom or service name to begin.",
-    "hey": '👋 Hey there! Describe an issue (e.g. *"payment-api is returning 500s"*) and I\'ll dig in.',
-    "okay": "Got it! Ready when you are — just describe the incident you want me to investigate.",
-    "ok": "Sure thing! What incident should I look into?",
-    "thanks": "You're welcome! Let me know if you need another investigation.",
-    "thank you": "Glad I could help! 🙌",
-    "bye": "See you next time! Stay incident-free 🚀",
-}
-
-# Questions that only ask whether a service is up get a one-line answer.
-_STATUS_PATTERN = re.compile(r"\b(down|up|status|healthy|alive|working|available|outage)\b")
-_INVESTIGATE_WORDS = ("investigat", "diagnos", "debug", "analy")
-
-
-def _squeeze(text: str) -> str:
-    """Collapses repeated letters so 'hii' and 'helloo' match their canonical greetings."""
-    return re.sub(r"(.)\1+", r"\1", text)
-
-
-# Short replies that ask for action on whatever was discussed last, e.g. "fix it" after a status answer.
-_FOLLOWUP_FIX_PATTERN = re.compile(
-    r"^(?:please\s+)?(?:fix|remediate|resolve)"
-    r"(?:\s+(?:it|this|that|those|these|them|the (?:faults?|issues?|problems?)))?[.!?]*$"
-    r"|^(?:do it|go ahead)[.!?]*$",
-    re.IGNORECASE,
-)
-_KNOWN_SERVICES = ("payment-api", "order-service", "auth-service")
-
-
-def _resolve_followup(prompt: str, history: list[dict[str, Any]]) -> str:
-    """Expands a short follow-up such as 'fix it' into a full request about the service last discussed."""
-    if not _FOLLOWUP_FIX_PATTERN.match(prompt.strip()):
-        return prompt
-    last_reply = next((m["content"] for m in reversed(history) if m["role"] == "assistant"), "")
-    service = next((s for s in _KNOWN_SERVICES if s in last_reply), "payment-api")
-    return f"Investigate {service} degradation and propose a fix."
-
-
-def _is_investigation_request(text: str) -> bool:
-    """Returns True if the message is an investigation request vs. conversational."""
-    low = text.lower().strip()
-    # Very short messages are almost certainly not investigations
-    if len(low) < 10:
-        return False
-    return any(kw in low for kw in _INVESTIGATION_KEYWORDS)
-
-
-def _get_conversational_reply(text: str) -> str | None:
-    """Returns a canned reply for common conversational messages, or None if unknown."""
-    low = _squeeze(text.lower().strip().rstrip("!.,?"))
-    for key, reply in _GREETING_RESPONSES.items():
-        squeezed = _squeeze(key)
-        if low == squeezed or low.startswith(squeezed + " "):
-            return reply
-    return None
-
-
-# Words that narrow the answer to the sections the operator asked about.
-# No match at all means a general investigation, so the full report is shown.
-_FOCUS_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "blast": ("blast", "depend", "upstream", "downstream", "topology"),
-    "golden": ("golden", "signal", "latency", "cpu", "memory", "metric", "5xx", "error rate"),
-    "deploy": ("deploy", "dep-", "release", "rollback", "regression", "version"),
-    "history": ("past incident", "history", "historical", "similar", "previous", "seen before"),
-    "logs": ("log", "loki", "stack trace"),
-    "rca": ("root cause", "cause", "why", "rca", "remediat"),
-}
-
-
-def _detect_focus(prompt: str) -> frozenset[str]:
-    """Returns the sections the prompt asks for; an empty set means the full report."""
-    low = prompt.lower()
-    focus = {key for key, words in _FOCUS_KEYWORDS.items() if any(w in low for w in words)}
-    if _STATUS_PATTERN.search(low) and not any(w in low for w in _INVESTIGATE_WORDS):
-        focus.add("status")
-    return frozenset(focus)
-
-
-def _golden_table(error_rate: float, p95_sec: float, cpu: float, request_rate: float) -> str:
-    # Error rate and latency come from requests; with none in the window they are not measurements.
-    traffic = request_rate > 0
-    error_status = _status_label(error_rate, 3, 5, "%") if traffic else "⚪ no traffic"
-    latency_status = _status_label(p95_sec * 1000, 500, 1000, "ms") if traffic else "⚪ no traffic"
-    return (
-        "#### Golden signals\n\n"
-        "| Signal | Value | Status |\n"
-        "|--------|-------|--------|\n"
-        f"| 5xx error rate | `{error_rate:.2f}%` | {error_status} |\n"
-        f"| p95 latency | `{p95_sec * 1000:.0f}ms` | {latency_status} |\n"
-        f"| CPU usage | `{cpu:.1f}%` | {_status_label(cpu, 60, 80, '%')} |"
-    )
-
-
 def _verification_markdown(report: Any) -> str:
     """Renders the backend's post-remediation health report: measured before vs. after."""
     if not isinstance(report, dict):
@@ -375,140 +227,6 @@ def _verification_markdown(report: Any) -> str:
         f"| p95 latency | `{float(report.get('previous_latency_ms', 0.0)):.0f}ms` "
         f"| `{float(report.get('current_latency_ms', 0.0)):.0f}ms` |\n\n"
         f"_{report.get('details', '')}_"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Live questions — time-scoped status, logs and metrics read telemetry directly.
-# They never open an incident, so "is it up" always reflects the last few seconds.
-# ---------------------------------------------------------------------------
-_WINDOW_PATTERN = re.compile(r"\blast\s+(\d+)\s*(seconds?|secs?|s|minutes?|mins?|m)\b")
-_LIVE_DEFAULT_SECONDS = 60
-_LIVE_MIN_SECONDS = 10  # payment-api is scraped every 5 s, so a 10 s rate still sees two samples
-
-
-def _parse_window_seconds(low: str) -> int | None:
-    """Reads phrases like 'last 10 seconds' or 'last 2 min' into seconds."""
-    match = _WINDOW_PATTERN.search(low)
-    if not match:
-        return None
-    amount, unit = int(match.group(1)), match.group(2)
-    return amount * 60 if unit.startswith("m") else amount
-
-
-def _window_label(seconds: int) -> str:
-    return f"{seconds} s" if seconds < 60 else f"{seconds // 60} min"
-
-
-def _live_request(prompt: str) -> tuple[str, int] | None:
-    """Detects a live status, log or metric question. Returns (kind, window_seconds) or None."""
-    low = prompt.lower()
-    if any(w in low for w in _INVESTIGATE_WORDS):
-        return None
-    window = max(_parse_window_seconds(low) or _LIVE_DEFAULT_SECONDS, _LIVE_MIN_SECONDS)
-    focus = _detect_focus(prompt)
-    if focus == frozenset({"status"}):
-        return "status", window
-    if re.search(r"\blogs?\b", low):
-        return "logs", window
-    if "golden" in focus and focus <= {"golden"}:
-        return "metrics", window
-    return None
-
-
-def _fetch_live(path: str, params: dict[str, Any]) -> tuple[int, Any]:
-    return api_request(
-        "GET", f"{AGENT_API_URL}/api/v1/telemetry/{path}?{urlencode(params)}", timeout=10.0
-    )
-
-
-def _status_answer(
-    service: str, sig: dict[str, Any], label: str, health: tuple[int, Any] | None
-) -> str:
-    """Combines the service's own health endpoint with recent traffic metrics.
-
-    `health` is None for services without a health probe here.
-    """
-    error_rate = float(sig.get("error_rate_5xx_percent", 0.0))
-    p95_ms = float(sig.get("p95_latency_ms", 0.0))
-    cpu = float(sig.get("cpu_usage_percent", 0.0))
-    rate = float(sig.get("request_rate_per_sec", 0.0))
-
-    faults: list[str] = []
-    if health is not None:
-        code, body = health
-        if code != 200 or not isinstance(body, dict):
-            return f"🔴 **`{service}` is down.** Its health endpoint did not respond (HTTP {code})."
-        if body.get("status") != "healthy":
-            faults.append(f"health reports {body.get('status', 'unknown')}")
-        faults += [
-            f"active fault: {name}" for name, on in (body.get("active_chaos") or {}).items() if on
-        ]
-
-    if rate > 0:
-        if error_rate >= 3.0:
-            faults.append(f"5xx error rate {error_rate:.1f}%")
-        if p95_ms >= 1000.0:
-            faults.append(f"p95 latency {p95_ms:.0f}ms")
-        traffic_line = (
-            f"5xx `{error_rate:.2f}%` · p95 `{p95_ms:.0f}ms` · CPU `{cpu:.1f}%` · last {label}"
-        )
-    else:
-        # Zero traffic makes the error rate 0 by arithmetic, so it proves nothing about health.
-        traffic_line = f"No requests in the last {label}, so error rate and latency are unverified."
-
-    if faults:
-        return f"🔴 **`{service}` is degraded:** {'; '.join(faults)}. {traffic_line}"
-    if health is None and rate <= 0:
-        return f"⚪ **`{service}` status unknown.** No requests in the last {label}, so metrics can't confirm health."
-    return f"🟢 **`{service}` is up.** Health endpoint responds; no fault detected. {traffic_line}"
-
-
-def _live_answer(kind: str, window: int, service: str) -> str:
-    label = _window_label(window)
-    if kind in ("status", "metrics"):
-        code, sig = _fetch_live(
-            "metrics/golden-signals", {"service": service, "window_seconds": window}
-        )
-        if code != 200:
-            return f"❌ Could not read live metrics for `{service}` (HTTP {code})."
-        if kind == "status":
-            health = (
-                api_request("GET", f"{PAYMENT_API_URL}/health", timeout=3.0)
-                if service == "payment-api"
-                else None
-            )
-            return _status_answer(service, sig, label, health)
-        return f"#### Golden signals · last {label}\n\n" + _golden_table(
-            float(sig["error_rate_5xx_percent"]),
-            float(sig["p95_latency_ms"]) / 1000,
-            float(sig["cpu_usage_percent"]),
-            float(sig["request_rate_per_sec"]),
-        )
-
-    code, result = _fetch_live(
-        "logs/query",
-        {
-            "query": f'{{service="{service}"}}',
-            "window_seconds": window,
-            "limit": 200,
-            "deduplicate": "false",
-        },
-    )
-    if code != 200:
-        return f"❌ Could not read logs for `{service}` (HTTP {code})."
-    entries = [e for stream in result.get("streams", []) for e in stream.get("entries", [])]
-    entries.sort(key=lambda e: str(e.get("timestamp", "")), reverse=True)
-    if not entries:
-        return f"No log lines from `{service}` in the last {label}."
-    lines = [
-        f"{str(e.get('timestamp', ''))[11:19]} {str(e.get('level', 'INFO')):<5} {e.get('line', '')}"
-        for e in entries[:40]
-    ]
-    return (
-        f"#### Logs · `{service}` · last {label}\n\n"
-        f"{len(entries)} line(s), newest first, showing {min(len(entries), 40)}\n\n"
-        f"```\n" + "\n".join(lines) + "\n```"
     )
 
 
@@ -535,28 +253,6 @@ with st.sidebar:
         if st.button(q, key=f"sq_{idx}", use_container_width=True):
             st.session_state.preset_prompt = q
             st.rerun()
-
-    with st.expander("Chaos simulator"):
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("🔥 Deadlock", use_container_width=True):
-                api_request("POST", f"{PAYMENT_API_URL}/chaos/db-deadlock")
-                for i in range(8):
-                    api_request(
-                        "POST", f"{PAYMENT_API_URL}/pay", data={"amount": 25.0 + i}, timeout=2.0
-                    )
-                st.toast("DB deadlock injected — pool saturated", icon="⚠️")
-        with c2:
-            if st.button("💥 Bad deploy", use_container_width=True):
-                api_request("POST", f"{PAYMENT_API_URL}/chaos/bad-deployment")
-                for i in range(8):
-                    api_request(
-                        "POST", f"{PAYMENT_API_URL}/pay", data={"amount": 30.0 + i}, timeout=2.0
-                    )
-                st.toast("DEP-101 v2.3.1 regression active", icon="⚠️")
-        if st.button("✅ Clear all chaos", use_container_width=True):
-            api_request("POST", f"{PAYMENT_API_URL}/chaos/clear")
-            st.toast("Service restored to healthy baseline.", icon="✅")
 
     pay_ok = ping_endpoint(f"{PAYMENT_API_URL}/health")
     dot_color = "#10A37F" if pay_ok else "#EF4444"
@@ -740,36 +436,7 @@ if user_prompt:
     prompt = user_prompt.strip()
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.markdown(_user_bubble(prompt), unsafe_allow_html=True)
-    # Follow-ups like "fix it" are answered about the service discussed last
-    prompt = _resolve_followup(prompt, st.session_state.messages[:-1])
-
-    # ── Conversational intent: don't hit the API for chit-chat ──
-    conv_reply = _get_conversational_reply(prompt)
-    if conv_reply and not _is_investigation_request(prompt):
-        with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
-            st.write_stream(_stream_text(conv_reply))
-        st.session_state.messages.append({"role": "assistant", "content": conv_reply})
-        st.stop()
-
-    # ── Determine target service from prompt ──
-    target_svc = "payment-api"
-    lower = prompt.lower()
-    if "order" in lower:
-        target_svc = "order-service"
-    elif "auth" in lower:
-        target_svc = "auth-service"
-
-    # ── Live, time-scoped questions read telemetry directly; no incident is opened ──
-    live = _live_request(prompt)
-    if live:
-        kind, window = live
-        answer = _live_answer(kind, window, target_svc)
-        with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
-            st.write_stream(_stream_text(answer))
-        st.session_state.messages.append({"role": "assistant", "content": answer})
-        st.stop()
-
-    # ── Everything else goes to the agent, which answers from live tools ──
+    # The backend decides how to answer: greeting, live telemetry, or the agent
     history = [
         {"role": m["role"], "content": m["content"]}
         for m in st.session_state.messages[:-1]
@@ -797,6 +464,5 @@ if user_prompt:
         st.session_state.current_incident = {
             "id": incident["incident_id"],
             "proposal": incident["remediation_proposal"],
-            "service": "payment-api",
         }
         st.rerun()
