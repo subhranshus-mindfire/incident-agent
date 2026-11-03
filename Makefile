@@ -42,6 +42,18 @@ down:
 logs:
 	docker compose logs -f app
 
+chaos-deadlock:
+	python3 -m simulation.run_chaos --scenario deadlock
+
+chaos-bad-deploy:
+	python3 -m simulation.run_chaos --scenario bad-deployment
+
+chaos-clear:
+	python3 -m simulation.run_chaos --scenario clear
+
+chaos-health:
+	python3 -m simulation.run_chaos --scenario health
+
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	find . -type d -name ".pytest_cache" -exec rm -rf {} +

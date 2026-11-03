@@ -305,7 +305,7 @@ async def test_required_seven_tools_contract():
     assert metrics.http_error_rate_pct >= 0.0
 
     # 3. get_recent_deployments
-    deployments = get_recent_deployments("payment-api")
+    deployments = await get_recent_deployments("payment-api")
     assert len(deployments) >= 1
     assert deployments[0].version == "v2.3.1"
 

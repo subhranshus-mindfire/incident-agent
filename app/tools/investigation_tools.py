@@ -1,6 +1,9 @@
-import logging
 from datetime import UTC, datetime
+import logging
+import os
 from typing import Any
+
+import httpx
 
 from app.constants.service_dependencies import SERVICE_DEPENDENCIES, ServiceDependencyMap
 from app.llms.llm_engine import get_investigation_engine
@@ -162,8 +165,29 @@ async def get_system_metrics(
     )
 
 
-def get_recent_deployments(service: str) -> list[DeploymentRecord]:
+async def get_recent_deployments(service: str) -> list[DeploymentRecord]:
     """Tool 3: Finds recent releases, image tags, and deployment timestamps for a service."""
+    if service == "payment-api":
+        target_url = os.getenv("PAYMENT_API_URL", "http://payment-api:8080")
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                res = await client.get(f"{target_url}/deployments")
+                if res.status_code == 200:
+                    data = res.json()
+                    return [
+                        DeploymentRecord(
+                            deployment_id=d.get("deployment_id", "DEP-101"),
+                            service="payment-api",
+                            version=d.get("version", "v2.3.1"),
+                            deployed_at=d.get("deployed_at", datetime.now(UTC).isoformat()),
+                            commit_sha=d.get("commit_sha", "c3f81e9"),
+                            status=d.get("status", "SUCCESS"),
+                        )
+                        for d in data
+                    ]
+        except Exception as exc:
+            logger.debug(f"Live deployment fetch from payment-api failed: {exc}")
+
     if service in DEFAULT_DEPLOYMENT_CATALOG:
         return DEFAULT_DEPLOYMENT_CATALOG[service]
     return [
@@ -222,6 +246,21 @@ async def execute_remediation(
         rollback_plan=f"Revert action {action} on {service}",
         requires_approval=approval_id is None,
     )
+
+    # Live remediation trigger on target microservice if reachable
+    if service == "payment-api":
+        target_url = os.getenv("PAYMENT_API_URL", "http://payment-api:8080")
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                if action_type == RemediationActionType.ROLLBACK_DEPLOYMENT:
+                    await client.post(f"{target_url}/remediation/rollback")
+                elif action_type == RemediationActionType.TERMINATE_DB_TRANSACTIONS:
+                    await client.post(f"{target_url}/remediation/kill-queries")
+                elif action_type == RemediationActionType.ROLLING_RESTART:
+                    await client.post(f"{target_url}/remediation/restart")
+        except Exception as exc:
+            logger.debug(f"Live payment-api remediation hook: {exc}")
+
     return await executor.execute_action(proposal, dry_run=False)
 
 

@@ -38,7 +38,7 @@ async def node_ingest_alert(state: InvestigationState) -> dict[str, Any]:
     affected_services = [service] + dep_map.downstream_services + dep_map.upstream_services
 
     # Find recent deployments
-    recent_deployments = get_recent_deployments(service)
+    recent_deployments = await get_recent_deployments(service)
 
     msg = f"Alert received on {service}: {symptoms}. Affected services: {', '.join(affected_services)}"
 

@@ -93,6 +93,30 @@ services:
     networks:
       - incident-network
 
+  payment-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: incident-agent-payment-api
+    restart: unless-stopped
+    command: ["uvicorn", "simulation.services.payment_api:app", "--host", "0.0.0.0", "--port", "8080"]
+    ports:
+      - "8080:8080"
+    environment:
+      - LOKI_URL=http://loki:3100
+    depends_on:
+      loki:
+        condition: service_healthy
+    volumes:
+      - ./simulation:/workspace/simulation
+    networks:
+      - incident-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --tries=1 --spider http://localhost:8080/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   app:
     build:
       context: .
@@ -127,6 +151,7 @@ services:
         condition: service_healthy
     volumes:
       - ./app:/workspace/app
+      - ./simulation:/workspace/simulation
       - ./tests:/workspace/tests
       - ./migrations:/workspace/migrations
       - ./pyproject.toml:/workspace/pyproject.toml
@@ -145,6 +170,7 @@ services:
       - PYTHONPATH=/workspace
     volumes:
       - ./app:/workspace/app
+      - ./simulation:/workspace/simulation
       - ./tests:/workspace/tests
       - ./pyproject.toml:/workspace/pyproject.toml
     command: ["pytest", "-v", "tests/"]
