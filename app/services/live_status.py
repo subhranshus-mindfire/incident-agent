@@ -8,13 +8,24 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Final, Literal
+from typing import Literal
 
 import httpx
 
+from app.constants.live import (
+    DEFAULT_WINDOW_SECONDS,
+    GOLDEN_WORDS,
+    INVESTIGATE_WORDS,
+    LOGS_PATTERN,
+    MAX_LOG_LINES,
+    MAX_WINDOW_SECONDS,
+    MIN_WINDOW_SECONDS,
+    OTHER_TOPIC_WORDS,
+    STATUS_PATTERN,
+    WINDOW_PATTERN,
+)
 from app.constants.services import PRIMARY_SERVICE
 from app.constants.thresholds import (
     CPU_CRITICAL_PCT,
@@ -33,41 +44,6 @@ logger = logging.getLogger("incident_agent.services.live_status")
 
 LiveKind = Literal["status", "metrics", "logs"]
 
-DEFAULT_WINDOW_SECONDS: Final = 60
-# payment-api is scraped every 5 s, so a 10 s rate still sees two samples.
-MIN_WINDOW_SECONDS: Final = 10
-MAX_WINDOW_SECONDS: Final = 3600
-MAX_LOG_LINES: Final = 40
-
-_WINDOW_PATTERN: Final = re.compile(r"\blast\s+(\d+)\s*(seconds?|secs?|s|minutes?|mins?|m)\b")
-_INVESTIGATE_WORDS: Final = ("investigat", "diagnos", "debug", "analy")
-_STATUS_PATTERN: Final = re.compile(r"\b(down|up|status|healthy|alive|working|available|outage)\b")
-_LOGS_PATTERN: Final = re.compile(r"\blogs?\b")
-_GOLDEN_WORDS: Final = (
-    "golden",
-    "signal",
-    "latency",
-    "cpu",
-    "memory",
-    "metric",
-    "5xx",
-    "error rate",
-)
-# Topics that need the full investigation or the agent, so a live answer would be incomplete.
-_OTHER_TOPIC_WORDS: Final = (
-    "blast",
-    "depend",
-    "upstream",
-    "downstream",
-    "deploy",
-    "regression",
-    "past incident",
-    "history",
-    "root cause",
-    "cause",
-    "why",
-)
-
 
 @dataclass(frozen=True)
 class LiveRequest:
@@ -85,7 +61,7 @@ class HealthProbe:
 
 def parse_window_seconds(text: str) -> int | None:
     """Reads phrases like 'last 10 seconds' or 'last 2 min' into seconds."""
-    match = _WINDOW_PATTERN.search(text.lower())
+    match = WINDOW_PATTERN.search(text.lower())
     if not match:
         return None
     amount, unit = int(match.group(1)), match.group(2)
@@ -106,15 +82,15 @@ def resolve_service(text: str) -> str:
 def classify_live_request(text: str) -> LiveRequest | None:
     """Returns a live request for status, log or metric questions, or None when the agent should answer."""
     low = text.lower()
-    if any(word in low for word in _INVESTIGATE_WORDS):
+    if any(word in low for word in INVESTIGATE_WORDS):
         return None
-    if any(word in low for word in _OTHER_TOPIC_WORDS):
+    if any(word in low for word in OTHER_TOPIC_WORDS):
         return None
     window = parse_window_seconds(text) or DEFAULT_WINDOW_SECONDS
-    if _LOGS_PATTERN.search(low):
+    if LOGS_PATTERN.search(low):
         return LiveRequest("logs", window)
-    golden = any(word in low for word in _GOLDEN_WORDS)
-    if _STATUS_PATTERN.search(low) and not golden:
+    golden = any(word in low for word in GOLDEN_WORDS)
+    if STATUS_PATTERN.search(low) and not golden:
         return LiveRequest("status", window)
     if golden:
         return LiveRequest("metrics", window)

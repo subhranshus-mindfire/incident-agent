@@ -15,8 +15,9 @@ from langchain_ollama import ChatOllama
 from pydantic import SecretStr
 
 from app.config.config import Settings
-
-MAX_PROVIDER_RETRIES = 5
+from app.constants.llm import (
+    MAX_PROVIDER_RETRIES,
+)
 
 
 class ProviderNotConfiguredError(RuntimeError):

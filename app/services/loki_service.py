@@ -8,6 +8,9 @@ from typing import Any
 import httpx
 
 from app.config.config import settings
+from app.constants.patterns import (
+    SERVICE_IDENTIFIER_PATTERN,
+)
 from app.core.http_client import get_shared_http_client
 from app.exceptions.domain import ExternalServiceException
 from app.schemas.telemetry import (
@@ -19,7 +22,6 @@ from app.schemas.telemetry import (
 logger = logging.getLogger("incident_agent.loki_service")
 
 # Strict identifier validation for LogQL label injection defense
-SERVICE_IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z0-9_\-\.]+$")
 
 
 class LokiService:

@@ -3,6 +3,10 @@ import logging
 from typing import Any
 
 from app.constants.enums import IncidentSeverity, IncidentStatus
+from app.constants.remediation import (
+    FAULT_REMEDIATIONS,
+    VERIFY_SETTLE_SECONDS,
+)
 from app.constants.thresholds import (
     CPU_CRITICAL_PCT,
     ERROR_RATE_FAULT_PCT,
@@ -21,7 +25,6 @@ from app.schemas.telemetry import GoldenSignalMetrics
 from app.services.clients import get_prometheus_service
 from app.services.qdrant_service import get_shared_qdrant_service
 from app.tools.investigation_tools import (
-    FAULT_REMEDIATIONS,
     create_incident_report,
     execute_remediation,
     fetch_application_logs,
@@ -33,9 +36,6 @@ from app.tools.investigation_tools import (
 )
 
 logger = logging.getLogger("incident_agent.agents.nodes")
-
-# Post-remediation verification: wait for the rollback to settle, then require both signals under threshold.
-_VERIFY_SETTLE_SECONDS = 5
 
 
 async def node_ingest_alert(state: InvestigationState) -> dict[str, Any]:
@@ -414,7 +414,7 @@ async def node_verify_health(state: InvestigationState) -> dict[str, Any]:
         )
     else:
         # Let the rollback settle, then measure only the last minute so pre-rollback errors don't count.
-        await asyncio.sleep(_VERIFY_SETTLE_SECONDS)
+        await asyncio.sleep(VERIFY_SETTLE_SECONDS)
         try:
             current = await get_prometheus_service().get_golden_signals(
                 service=state["service"], window_minutes=1
@@ -430,7 +430,7 @@ async def node_verify_health(state: InvestigationState) -> dict[str, Any]:
                 current_error_rate=prev_error,
                 previous_latency_ms=prev_latency_ms,
                 current_latency_ms=prev_latency_ms,
-                observation_window_seconds=_VERIFY_SETTLE_SECONDS,
+                observation_window_seconds=VERIFY_SETTLE_SECONDS,
                 details="Post-remediation metrics unavailable from Prometheus; health unverified.",
             )
         else:
@@ -458,7 +458,7 @@ async def node_verify_health(state: InvestigationState) -> dict[str, Any]:
                 current_error_rate=current.error_rate_5xx_percent,
                 previous_latency_ms=prev_latency_ms,
                 current_latency_ms=current.p95_latency_ms,
-                observation_window_seconds=_VERIFY_SETTLE_SECONDS,
+                observation_window_seconds=VERIFY_SETTLE_SECONDS,
                 details=(
                     f"5xx error rate {prev_error:.2f}% -> {current.error_rate_5xx_percent:.2f}%; "
                     f"p95 latency {prev_latency_ms:.0f}ms -> {current.p95_latency_ms:.0f}ms. {outcome}"

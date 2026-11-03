@@ -1,12 +1,14 @@
 import asyncio
 import logging
-import re
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 
 from app.config.config import settings
+from app.constants.patterns import (
+    SERVICE_IDENTIFIER_PATTERN,
+)
 from app.constants.thresholds import (
     CPU_ALERT_PCT,
     ERROR_RATE_CRITICAL_PCT,
@@ -23,9 +25,6 @@ from app.schemas.telemetry import (
 )
 
 logger = logging.getLogger("incident_agent.prometheus_service")
-
-# Strict identifier validation for PromQL label injection defense
-SERVICE_IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z0-9_\-\.]+$")
 
 
 class PrometheusService:

@@ -21,6 +21,15 @@ from langchain_core.tools import tool
 from app.config.config import get_settings
 from app.config.database import async_session_factory
 from app.constants.enums import IncidentSeverity
+from app.constants.live import MAX_WINDOW_SECONDS, MIN_WINDOW_SECONDS
+from app.constants.llm import (
+    MAX_HISTORY_CHARS,
+    MAX_HISTORY_TURNS,
+    MAX_LIST_ROWS,
+    MAX_OUTPUT_TOKENS,
+    MAX_TOOL_CALL_ATTEMPTS,
+    MAX_TOOL_ROUNDS,
+)
 from app.constants.service_dependencies import SERVICE_DEPENDENCIES
 from app.constants.services import PRIMARY_SERVICE
 from app.llms.providers import ProviderNotConfiguredError, build_chat_model, is_rate_limit_error
@@ -35,14 +44,6 @@ from app.utils.time import clamp_seconds
 
 logger = logging.getLogger("incident_agent.llms.agent")
 
-MAX_TOOL_ROUNDS = 6
-MAX_TOOL_CALL_ATTEMPTS = 3
-MAX_OUTPUT_TOKENS = 1024
-MAX_HISTORY_TURNS = 6
-MAX_HISTORY_CHARS = 600
-MAX_LIST_ROWS = 25
-MIN_WINDOW_SECONDS = 10
-MAX_WINDOW_SECONDS = 3600
 
 CHAT_SYSTEM_PROMPT = load_prompt("chat_agent")
 

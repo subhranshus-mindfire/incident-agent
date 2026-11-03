@@ -5,6 +5,10 @@ from typing import Any
 
 import httpx
 
+from app.constants.remediation import (
+    FAULT_REMEDIATIONS,
+    PAYMENT_API_REMEDIATIONS,
+)
 from app.constants.service_dependencies import SERVICE_DEPENDENCIES, ServiceDependencyMap
 from app.constants.services import PRIMARY_SERVICE
 from app.constants.thresholds import (
@@ -175,21 +179,6 @@ async def execute_remediation(
     return await executor.execute_action(proposal, dry_run=False)
 
 
-# Remediation endpoint on payment-api for each action.
-_PAYMENT_API_REMEDIATIONS: dict[RemediationActionType, str] = {
-    RemediationActionType.ROLLBACK_DEPLOYMENT: "/remediation/rollback",
-    RemediationActionType.TERMINATE_DB_TRANSACTIONS: "/remediation/kill-queries",
-    RemediationActionType.ROLLING_RESTART: "/remediation/restart",
-}
-
-# Which remediation clears each live fault that payment-api reports on /health.
-FAULT_REMEDIATIONS: dict[str, RemediationActionType] = {
-    "bad_deployment": RemediationActionType.ROLLBACK_DEPLOYMENT,
-    "deadlock": RemediationActionType.TERMINATE_DB_TRANSACTIONS,
-    "cpu_burn": RemediationActionType.ROLLING_RESTART,
-}
-
-
 async def get_active_faults(service: str) -> dict[str, bool] | None:
     """Fault flags payment-api reports right now. None when the service cannot be reached."""
     if service != PRIMARY_SERVICE:
@@ -209,14 +198,14 @@ async def _apply_payment_api_remediation(
     action_type: RemediationActionType,
 ) -> RemediationExecutionResult:
     """Calls payment-api's remediation endpoint and checks its health before reporting success."""
-    if action_type not in _PAYMENT_API_REMEDIATIONS:
+    if action_type not in PAYMENT_API_REMEDIATIONS:
         return RemediationExecutionResult(
             success=False,
             action_type=action_type.value,
             message=f"No payment-api remediation exists for {action_type.value}.",
         )
 
-    endpoint = _PAYMENT_API_REMEDIATIONS[action_type]
+    endpoint = PAYMENT_API_REMEDIATIONS[action_type]
     target_url = os.getenv("PAYMENT_API_URL", "http://payment-api:8080")
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
