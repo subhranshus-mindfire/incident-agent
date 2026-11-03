@@ -31,6 +31,7 @@ dependencies = [
     "langchain>=0.1.13",
     "langchain-core>=0.1.33",
     "langchain-groq>=0.1.9",
+    "langchain-google-genai>=2.0.0",
 ]
 
 [project.optional-dependencies]

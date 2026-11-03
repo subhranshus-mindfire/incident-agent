@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -32,9 +33,12 @@ class Settings(BaseSettings):
     PROMETHEUS_URL: str = "http://localhost:9090"
     LOKI_URL: str = "http://localhost:3100"
 
-    # LLM (Groq, OpenAI-compatible chat completions with tool calling)
+    # LLM provider for the chat agent: "groq" or "gemini"
+    LLM_PROVIDER: Literal["groq", "gemini"] = "groq"
     GROQ_API_KEY: str | None = None
     GROQ_MODEL: str = "openai/gpt-oss-120b"
+    GEMINI_API_KEY: str | None = None
+    GEMINI_MODEL: str = "gemini-2.5-flash"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

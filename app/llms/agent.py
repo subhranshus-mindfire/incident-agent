@@ -14,17 +14,16 @@ from typing import Any
 from uuid import uuid4
 
 import httpx
-from groq import BadRequestError, RateLimitError
+from groq import BadRequestError
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
-from langchain_groq import ChatGroq
-from pydantic import SecretStr
 
 from app.config.config import get_settings
 from app.config.database import async_session_factory
 from app.constants.enums import IncidentSeverity
 from app.constants.service_dependencies import SERVICE_DEPENDENCIES
 from app.constants.services import PRIMARY_SERVICE
+from app.llms.providers import ProviderNotConfiguredError, build_chat_model, is_rate_limit_error
 from app.services.chat_router import route_message
 from app.services.clients import get_loki_service, get_prometheus_service
 from app.services.investigation_service import InvestigationService, summarize_trigger
@@ -36,7 +35,6 @@ logger = logging.getLogger("incident_agent.llms.agent")
 MAX_TOOL_ROUNDS = 6
 MAX_TOOL_CALL_ATTEMPTS = 3
 MAX_OUTPUT_TOKENS = 1024
-MAX_PROVIDER_RETRIES = 5
 MAX_HISTORY_TURNS = 6
 MAX_HISTORY_CHARS = 600
 MAX_LIST_ROWS = 25
@@ -311,23 +309,13 @@ async def run_chat(message: str, history: list[dict[str, str]]) -> dict[str, Any
         return {"reply": routed.reply, "incident": None}
     message = routed.text
 
-    settings = get_settings()
-    if not settings.GROQ_API_KEY:
+    try:
+        base_llm = build_chat_model(get_settings(), max_output_tokens=MAX_OUTPUT_TOKENS)
+    except ProviderNotConfiguredError as exc:
         return {
-            "reply": "The language model is not configured. Set GROQ_API_KEY and restart the app.",
+            "reply": f"The language model is not configured: {exc}. Set it in .env and restart the app.",
             "incident": None,
         }
-
-    base_llm = ChatGroq(
-        model=settings.GROQ_MODEL,
-        api_key=SecretStr(settings.GROQ_API_KEY),
-        temperature=0,
-        max_tokens=MAX_OUTPUT_TOKENS,
-        max_retries=MAX_PROVIDER_RETRIES,
-        # Short answers do not need deep reasoning, and reasoning tokens count against the per-minute budget.
-        # Only the OpenAI-hosted models accept reasoning_effort; others reject the request.
-        reasoning_effort="low" if settings.GROQ_MODEL.startswith("openai/") else None,
-    )
     llm = base_llm.bind_tools(TOOLS)
 
     messages = _to_messages(history, message)
@@ -336,13 +324,13 @@ async def run_chat(message: str, history: list[dict[str, str]]) -> dict[str, Any
     for _ in range(MAX_TOOL_ROUNDS):
         try:
             ai_message = await _invoke_model(llm, messages)
-        except RateLimitError as exc:
-            logger.warning(f"Language model rate limit reached: {exc}")
-            return {
-                "reply": "The language model's per-minute limit is reached. Wait about a minute and ask again.",
-                "incident": incident,
-            }
-        except Exception as exc:  # oversized requests or provider outages
+        except Exception as exc:
+            if is_rate_limit_error(exc):
+                logger.warning(f"Language model rate limit reached: {exc}")
+                return {
+                    "reply": "The language model's usage limit is reached. Wait a while and ask again.",
+                    "incident": incident,
+                }
             logger.error(f"Language model call failed: {exc}")
             return {
                 "reply": "The language model could not process this request. "

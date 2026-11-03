@@ -24,6 +24,7 @@ langgraph>=0.0.30
 langchain>=0.1.13
 langchain-core>=0.1.33
 langchain-groq>=0.1.9
+langchain-google-genai>=2.0.0
 
 # Testing & Quality
 pytest>=8.1.0
