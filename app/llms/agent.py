@@ -24,6 +24,7 @@ from app.constants.enums import IncidentSeverity
 from app.constants.service_dependencies import SERVICE_DEPENDENCIES
 from app.constants.services import PRIMARY_SERVICE
 from app.llms.providers import ProviderNotConfiguredError, build_chat_model, is_rate_limit_error
+from app.prompts.loader import load_prompt
 from app.services.chat_router import route_message
 from app.services.clients import get_loki_service, get_prometheus_service
 from app.services.investigation_service import InvestigationService, summarize_trigger
@@ -40,27 +41,7 @@ MAX_HISTORY_CHARS = 600
 MAX_LIST_ROWS = 25
 MAX_WINDOW_SECONDS = 3600
 
-SYSTEM_PROMPT = """You are the SRE assistant for an incident-investigation console. You work on the
-payment-api service and its dependencies.
-
-Rules:
-- To decide whether a service is up, call get_service_health. Health faults count as evidence even when
-  there is no traffic. Never say a service is idle or fault-free while its health reports a fault.
-- Never show incident IDs or other internal identifiers in a reply. Refer to incidents by title, service and time.
-- When a list is shorter than the total, say how many are shown out of the total.
-- Call only the tools you were given, by their exact names. Never invent a tool name.
-- Answer only from tool results. Never invent metric values, log lines, deployments, incident IDs or causes.
-- Do not suggest versions, commands or remediation steps that are not in a tool result.
-- If a tool returns an error or no data, say so plainly and do not guess.
-- A request rate of 0 means no traffic, so error rate and latency are not measurements. Say so.
-- Quote numbers exactly as the tool returned them, with their time window.
-- To list or count past incidents, call list_stored_incidents. Use search_incident_memory only to find
-  incidents about a topic. Always state how many incidents were returned.
-- Call start_investigation only when the user asks to investigate, diagnose or fix a fault. It opens an
-  incident record and proposes a remediation that waits for human approval.
-- Questions unrelated to services or incidents: say you only cover service health, logs, deployments,
-  incidents and remediation. Do not call tools for them.
-- Be concise: one line with the verdict, then the evidence as short bullets or a small table."""
+CHAT_SYSTEM_PROMPT = load_prompt("chat_agent")
 
 
 def _clamp_window(seconds: int) -> int:
@@ -304,7 +285,7 @@ async def _invoke_model(llm: Any, messages: list[BaseMessage]) -> AIMessage:
 
 
 def _to_messages(history: list[dict[str, str]], message: str) -> list[BaseMessage]:
-    messages: list[BaseMessage] = [SystemMessage(content=SYSTEM_PROMPT)]
+    messages: list[BaseMessage] = [SystemMessage(content=CHAT_SYSTEM_PROMPT)]
     for item in history[-MAX_HISTORY_TURNS:]:
         if item.get("role") == "assistant":
             messages.append(AIMessage(content=item.get("content", "")[:MAX_HISTORY_CHARS]))
