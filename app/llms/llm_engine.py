@@ -119,8 +119,10 @@ class SREInvestigationEngine:
                 )
             )
 
-        # Fallback default hypothesis if telemetry is subtle
-        if not hypotheses:
+        # Fallback: only generate a generic hypothesis if at least one real signal exists.
+        # Never fabricate a hypothesis for a healthy service with zero errors and zero logs.
+        has_real_signal = high_cpu or high_mem or high_err or high_lat or bool(logs)
+        if not hypotheses and has_real_signal:
             matched_title = runbooks[0].title if runbooks else "Unknown Anomaly"
             hypotheses.append(
                 RCAHypothesis(
@@ -231,7 +233,7 @@ class SREInvestigationEngine:
             events[-8:] if events else ["Incident registered", "Automated investigation executed"]
         )
 
-        markdown = f"""# Incident Postmortem Report: {incident_id}
+        markdown = f"""# Incident Postmortem Report
 **Service:** `{service}` | **Severity:** `{state["severity"].value.upper()}` | **Status:** `{state["status"].value.upper()}`
 
 ---
@@ -275,7 +277,7 @@ Root cause analysis isolated **{rc_title}** with a confidence score of {hypothes
         return PostmortemReport(
             incident_id=incident_id,
             service=service,
-            summary=f"Incident {incident_id} on {service} investigated. Root cause: {rc_title}.",
+            summary=f"Investigation of {service} completed. Root cause: {rc_title}.",
             root_cause=rc_details,
             timeline=timeline_entries,
             remediation_summary=f"Action: {action_name} | Outcome: {status_text}",

@@ -71,7 +71,7 @@ class InvestigationService:
             "status": IncidentStatus.OPEN,
             "iteration_count": 0,
             "retry_count": 0,
-            "messages": [f"Triggered investigation for incident {incident_id} on {service}"],
+            "messages": [f"Triggered investigation on {service}"],
             "affected_services": [service],
             "log_findings": [],
             "metrics": None,
@@ -94,7 +94,7 @@ class InvestigationService:
             "execution_result": None,
             "verification_report": None,
             "postmortem": None,
-            "audit_events": [f"Triggered investigation for incident {incident_id}"],
+            "audit_events": ["Triggered investigation"],
             "error": None,
         }
 
@@ -225,7 +225,7 @@ class InvestigationService:
             if not incident:
                 incident = Incident(
                     id=incident_id,
-                    title=f"Incident on {service}: {symptoms[:80]}",
+                    title=f"{service} investigation",
                     service=service,
                     severity=severity,
                     status=IncidentStatus.MITIGATING
