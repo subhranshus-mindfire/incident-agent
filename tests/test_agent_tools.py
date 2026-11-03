@@ -57,3 +57,13 @@ async def test_model_call_gives_up_after_repeated_unknown_tool_names() -> None:
     with pytest.raises(BadRequestError):
         await _invoke_model(model, [])
     assert model.calls == 3
+
+
+def test_message_text_reads_plain_and_block_content() -> None:
+    from app.llms.agent import _message_text
+
+    assert _message_text(AIMessage(content="plain")) == "plain"
+    blocks = AIMessage(
+        content=[{"type": "text", "text": "Hello "}, {"type": "text", "text": "world"}]
+    )
+    assert _message_text(blocks) == "Hello world"

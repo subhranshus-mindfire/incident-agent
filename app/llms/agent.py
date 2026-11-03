@@ -273,6 +273,18 @@ TOOLS = [
 _TOOLS_BY_NAME = {t.name: t for t in TOOLS}
 
 
+def _message_text(message: BaseMessage) -> str:
+    """Plain text of a model reply. Gemini returns a list of content blocks; Groq returns a string."""
+    content = message.content
+    if isinstance(content, str):
+        return content
+    return "".join(
+        block.get("text", "")
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
+
+
 def _is_unknown_tool_error(exc: BadRequestError) -> bool:
     text = str(exc)
     return "tool_use_failed" in text or "tool call validation failed" in text
@@ -339,7 +351,7 @@ async def run_chat(message: str, history: list[dict[str, str]]) -> dict[str, Any
             }
         messages.append(ai_message)
         if not ai_message.tool_calls:
-            return {"reply": str(ai_message.content), "incident": incident}
+            return {"reply": _message_text(ai_message), "incident": incident}
 
         for call in ai_message.tool_calls:
             tool_fn = _TOOLS_BY_NAME.get(call["name"])
@@ -376,4 +388,4 @@ async def run_chat(message: str, history: list[dict[str, str]]) -> dict[str, Any
             "reply": "I could not finish the analysis. Try a narrower question.",
             "incident": incident,
         }
-    return {"reply": str(final.content), "incident": incident}
+    return {"reply": _message_text(final), "incident": incident}

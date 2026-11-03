@@ -11,7 +11,8 @@ from app.llms.providers import (
 
 
 def settings(**overrides: object) -> Settings:
-    base: dict[str, object] = {"_env_file": None}
+    # Set the provider explicitly: container environment variables would otherwise leak in.
+    base: dict[str, object] = {"_env_file": None, "LLM_PROVIDER": "groq"}
     base.update(overrides)
     return Settings(**base)  # type: ignore[arg-type]
 
