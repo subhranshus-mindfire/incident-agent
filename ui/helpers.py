@@ -1,8 +1,8 @@
 import json
 import logging
-from typing import Any
 import urllib.error
 import urllib.request
+from typing import Any
 
 logger = logging.getLogger("incident_agent.ui.helpers")
 

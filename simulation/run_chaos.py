@@ -1,7 +1,6 @@
 import argparse
 import asyncio
 import logging
-import sys
 
 from simulation.chaos_client import ChaosClient
 
@@ -13,7 +12,15 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description="Live Incident Chaos Simulation Runner")
     parser.add_argument(
         "--scenario",
-        choices=["deadlock", "bad-deployment", "cpu-burn", "clear", "traffic", "rollback", "health"],
+        choices=[
+            "deadlock",
+            "bad-deployment",
+            "cpu-burn",
+            "clear",
+            "traffic",
+            "rollback",
+            "health",
+        ],
         default="deadlock",
         help="Chaos scenario or action to trigger",
     )
@@ -54,7 +61,9 @@ async def main() -> None:
         logger.info(f"Traffic results: {len(codes)} processed under load")
     elif args.scenario == "traffic":
         codes = await client.generate_traffic(count=args.traffic_count)
-        logger.info(f"Generated {len(codes)} requests: {codes.count(200)} 200s, {codes.count(500)} 500s")
+        logger.info(
+            f"Generated {len(codes)} requests: {codes.count(200)} 200s, {codes.count(500)} 500s"
+        )
     elif args.scenario == "rollback":
         res = await client.rollback()
         logger.info(f"Rollback result: {res}")

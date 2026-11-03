@@ -1,10 +1,9 @@
 import asyncio
-from datetime import UTC, datetime
 import json
 import logging
-from typing import Any
 import urllib.error
 import urllib.request
+from typing import Any
 
 try:
     import httpx
@@ -69,7 +68,9 @@ class ChaosClient:
                 res = await client.post(f"{self.base_url}/chaos/db-deadlock")
                 logger.info("Injected DB deadlock on payment-api")
                 return res.json()  # type: ignore[no-any-return]
-        _, data = await asyncio.to_thread(_urllib_call, "POST", f"{self.base_url}/chaos/db-deadlock")
+        _, data = await asyncio.to_thread(
+            _urllib_call, "POST", f"{self.base_url}/chaos/db-deadlock"
+        )
         logger.info("Injected DB deadlock on payment-api")
         return data  # type: ignore[no-any-return]
 
@@ -79,7 +80,9 @@ class ChaosClient:
                 res = await client.post(f"{self.base_url}/chaos/bad-deployment")
                 logger.info("Injected bad deployment v2.3.1 on payment-api")
                 return res.json()  # type: ignore[no-any-return]
-        _, data = await asyncio.to_thread(_urllib_call, "POST", f"{self.base_url}/chaos/bad-deployment")
+        _, data = await asyncio.to_thread(
+            _urllib_call, "POST", f"{self.base_url}/chaos/bad-deployment"
+        )
         logger.info("Injected bad deployment v2.3.1 on payment-api")
         return data  # type: ignore[no-any-return]
 
@@ -131,5 +134,7 @@ class ChaosClient:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 res = await client.post(f"{self.base_url}/remediation/rollback")
                 return res.json()  # type: ignore[no-any-return]
-        _, data = await asyncio.to_thread(_urllib_call, "POST", f"{self.base_url}/remediation/rollback")
+        _, data = await asyncio.to_thread(
+            _urllib_call, "POST", f"{self.base_url}/remediation/rollback"
+        )
         return data  # type: ignore[no-any-return]

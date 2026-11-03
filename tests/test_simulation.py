@@ -1,5 +1,5 @@
-from httpx import ASGITransport, AsyncClient
 import pytest
+from httpx import ASGITransport, AsyncClient
 
 from simulation.chaos_client import ChaosClient
 from simulation.services.payment_api import app, chaos_state

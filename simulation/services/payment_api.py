@@ -1,16 +1,14 @@
-import asyncio
-from datetime import UTC, datetime
 import logging
 import os
 import time
 from typing import Any
 
-from fastapi import FastAPI, Response, status
 import httpx
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, Response, status
 
 # Prometheus metrics setup
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
+from pydantic import BaseModel, Field
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("simulation.payment_api")

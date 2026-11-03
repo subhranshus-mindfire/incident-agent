@@ -1,8 +1,6 @@
 import json
-from unittest.mock import MagicMock, patch
 import urllib.error
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 from ui.helpers import api_request, ping_endpoint
 
