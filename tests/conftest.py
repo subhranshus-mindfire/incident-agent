@@ -9,9 +9,9 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.config.database import Base, get_db_session
-from app.core.http_client import close_shared_http_client
 from app.main import app
 from app.services import clients
+from app.utils.http_client import close_shared_http_client
 
 # Isolated in-memory async SQLite engine for lightning-fast testing
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"

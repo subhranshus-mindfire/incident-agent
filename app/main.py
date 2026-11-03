@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.bootstrap import lifespan
 from app.config import settings
 from app.exceptions import (
     AppException,
@@ -11,9 +12,8 @@ from app.exceptions import (
     generic_exception_handler,
     validation_exception_handler,
 )
-from app.health import router as health_router
 from app.routes import api_router
-from app.starter import lifespan
+from app.routes.health import router as health_router
 
 # Configure basic logging
 logging.basicConfig(

@@ -9,7 +9,7 @@ from fastapi import FastAPI
 
 from app.config.config import settings
 from app.config.database import close_db
-from app.core.http_client import close_shared_http_client, get_shared_http_client
+from app.utils.http_client import close_shared_http_client, get_shared_http_client
 
 logger = logging.getLogger("incident_agent")
 
@@ -53,7 +53,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize Qdrant collection and seed runbooks in non-test environments
     if settings.ENVIRONMENT != "test":
         try:
-            from app.constants.default_runbooks import DEFAULT_PRODUCTION_RUNBOOKS
+            from app.seed.runbooks import DEFAULT_PRODUCTION_RUNBOOKS
             from app.services.qdrant_service import get_shared_qdrant_service
 
             qdrant = get_shared_qdrant_service()

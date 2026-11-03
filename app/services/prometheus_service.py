@@ -14,7 +14,6 @@ from app.constants.thresholds import (
     ERROR_RATE_CRITICAL_PCT,
     MEMORY_CRITICAL_PCT,
 )
-from app.core.http_client import get_shared_http_client
 from app.exceptions.domain import ExternalServiceException
 from app.schemas.telemetry import (
     AnomalyAlert,
@@ -23,6 +22,7 @@ from app.schemas.telemetry import (
     MetricQueryResult,
     MetricSeries,
 )
+from app.utils.http_client import get_shared_http_client
 
 logger = logging.getLogger("incident_agent.prometheus_service")
 

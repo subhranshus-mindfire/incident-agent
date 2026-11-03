@@ -4,7 +4,6 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query, status
 
-from app.constants.default_runbooks import DEFAULT_PRODUCTION_RUNBOOKS
 from app.exceptions.domain import EntityNotFoundException, ValidationException
 from app.schemas.runbook import (
     Runbook,
@@ -12,6 +11,7 @@ from app.schemas.runbook import (
     RunbookSearchRequest,
     RunbookSearchResult,
 )
+from app.seed.runbooks import DEFAULT_PRODUCTION_RUNBOOKS
 from app.services.qdrant_service import (
     QdrantService,
     get_shared_qdrant_service,

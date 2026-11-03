@@ -5,11 +5,11 @@ from qdrant_client import AsyncQdrantClient, models
 from qdrant_client.http.exceptions import UnexpectedResponse
 
 from app.config.config import settings
-from app.constants.default_incidents import DEFAULT_HISTORICAL_INCIDENTS
 from app.constants.patterns import UUID_REGEX
 from app.exceptions.domain import ExternalServiceException
 from app.schemas.agent_state import HistoricalIncident
 from app.schemas.runbook import Runbook, RunbookSearchResult
+from app.seed.historical_incidents import DEFAULT_HISTORICAL_INCIDENTS
 from app.services.embedding_service import EmbeddingService, get_embedding_service
 
 logger = logging.getLogger("incident_agent.qdrant_service")

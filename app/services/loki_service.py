@@ -11,13 +11,13 @@ from app.config.config import settings
 from app.constants.patterns import (
     SERVICE_IDENTIFIER_PATTERN,
 )
-from app.core.http_client import get_shared_http_client
 from app.exceptions.domain import ExternalServiceException
 from app.schemas.telemetry import (
     LogEntry,
     LogQueryResult,
     LogStream,
 )
+from app.utils.http_client import get_shared_http_client
 
 logger = logging.getLogger("incident_agent.loki_service")
 

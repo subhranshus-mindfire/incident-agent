@@ -9,7 +9,7 @@ from app.constants.remediation import (
     FAULT_REMEDIATIONS,
     PAYMENT_API_REMEDIATIONS,
 )
-from app.constants.service_dependencies import SERVICE_DEPENDENCIES, ServiceDependencyMap
+from app.constants.service_dependencies import SERVICE_DEPENDENCIES
 from app.constants.services import PRIMARY_SERVICE
 from app.constants.thresholds import (
     CPU_CRITICAL_PCT,
@@ -29,6 +29,7 @@ from app.schemas.agent_state import (
     RiskTier,
     TelemetrySummary,
 )
+from app.schemas.service import ServiceDependencyMap
 from app.schemas.telemetry import GoldenSignalMetrics, LogQueryResult
 from app.services.clients import get_loki_service, get_prometheus_service
 from app.services.qdrant_service import get_shared_qdrant_service
