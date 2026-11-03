@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Any
 
@@ -11,11 +12,15 @@ from app.schemas.agent_state import (
     RemediationActionType,
     RiskTier,
 )
+from app.schemas.telemetry import GoldenSignalMetrics
+from app.services.prometheus_service import PrometheusService
 from app.services.qdrant_service import get_shared_qdrant_service
 from app.tools.investigation_tools import (
+    FAULT_REMEDIATIONS,
     create_incident_report,
     execute_remediation,
     fetch_application_logs,
+    get_active_faults,
     get_recent_deployments,
     get_service_dependencies,
     get_system_metrics,
@@ -23,6 +28,11 @@ from app.tools.investigation_tools import (
 )
 
 logger = logging.getLogger("incident_agent.agents.nodes")
+
+# Post-remediation verification: wait for the rollback to settle, then require both signals under threshold.
+_VERIFY_SETTLE_SECONDS = 5
+_STABLE_ERROR_RATE_PCT = 3.0
+_STABLE_LATENCY_MS = 1000.0
 
 
 async def node_ingest_alert(state: InvestigationState) -> dict[str, Any]:
@@ -203,25 +213,32 @@ async def node_formulate_rca(state: InvestigationState) -> dict[str, Any]:
     logs = state.get("log_findings") or state.get("log_signatures", [])
     evidence = state.get("evidence", [])
 
-    # Guard: If there are no anomalies, no error logs, and no correlated evidence,
-    # the service is healthy. Do not fabricate a root cause.
-    has_metric_anomaly = telemetry and (
-        telemetry.http_error_rate_pct > 3.0
-        or telemetry.p99_latency_seconds > 1.0
-        or telemetry.cpu_usage_pct > 80.0
+    # Guard: Only formulate RCA if there is REAL fault evidence — elevated metrics or
+    # actual error logs. Deployment records and Qdrant matches alone are NOT fault signals;
+    # they are context. This prevents the LLM from fabricating a root cause when the
+    # service is healthy and the user is simply asking a conversational/search question.
+    has_metric_anomaly = bool(
+        telemetry
+        and (
+            telemetry.http_error_rate_pct > 3.0
+            or telemetry.p99_latency_seconds > 1.0
+            or telemetry.cpu_usage_pct > 80.0
+        )
     )
     has_error_logs = bool(logs)
-    has_evidence = len(evidence) > 0
 
-    if not has_metric_anomaly and not has_error_logs and not has_evidence:
-        logger.info("[Node 5: FormulateRCA] No anomalies detected — service appears healthy. Skipping RCA.")
+    if not has_metric_anomaly and not has_error_logs:
+        logger.info(
+            "[Node 5: FormulateRCA] No metric anomaly and no error logs detected — "
+            "service is healthy. Skipping RCA to prevent hallucinated hypotheses."
+        )
         return {
             "hypotheses": [],
             "rca_hypotheses": [],
             "selected_hypothesis": None,
             "audit_events": [
-                "No diagnostic evidence found — service metrics and logs appear within normal thresholds. "
-                "No root cause identified; no remediation proposed."
+                "No fault signals detected (error rate normal, no Loki errors). "
+                "Service appears healthy — no root cause identified; no remediation proposed."
             ],
         }
 
@@ -280,6 +297,20 @@ async def node_assess_blast_radius(state: InvestigationState) -> dict[str, Any]:
     if not hypothesis:
         return {"audit_events": ["Skipping remediation proposal: no root cause isolated"]}
 
+    # The RCA's suggested action is a rule guess. If the service reports a live fault that has a known
+    # remediation, the proposal follows the live fault instead.
+    override_note: list[str] = []
+    live_faults = await get_active_faults(state["service"]) or {}
+    live_actions = [
+        FAULT_REMEDIATIONS[f] for f, on in live_faults.items() if on and f in FAULT_REMEDIATIONS
+    ]
+    if live_actions and hypothesis.recommended_action not in live_actions:
+        override_note.append(
+            f"Proposed action changed from {hypothesis.recommended_action.value} to {live_actions[0].value} "
+            "to match the live fault."
+        )
+        hypothesis = hypothesis.model_copy(update={"recommended_action": live_actions[0]})
+
     engine = get_investigation_engine()
     proposal = engine.evaluate_blast_radius(
         hypothesis=hypothesis,
@@ -304,7 +335,8 @@ async def node_assess_blast_radius(state: InvestigationState) -> dict[str, Any]:
         "pending_action": proposal,
         "remediation_proposal": proposal,
         "approval_status": approval_status,
-        "audit_events": [
+        "audit_events": override_note
+        + [
             f"Remediation proposed: {proposal.action_type.value} on {proposal.target_resource} "
             f"(Risk: {proposal.risk_tier.value.upper()}, Approval: MANDATORY)"
         ],
@@ -360,37 +392,75 @@ async def node_execute_remediation(state: InvestigationState) -> dict[str, Any]:
 
 
 async def node_verify_health(state: InvestigationState) -> dict[str, Any]:
-    """Node 9: Verifies Golden Signals post-remediation to confirm system stabilization."""
+    """Node 9: Re-measures Prometheus golden signals after remediation to confirm stabilization."""
     logger.info("[Node 9: VerifyHealth] Probing post-remediation health metrics")
     exec_result = state.get("execution_result")
     prev_telemetry = state.get("metrics") or state.get("telemetry")
+    prev_error = prev_telemetry.http_error_rate_pct if prev_telemetry else 0.0
+    prev_latency_ms = (prev_telemetry.p99_latency_seconds * 1000) if prev_telemetry else 0.0
 
     if not exec_result or not exec_result.success:
         report = HealthVerificationReport(
             stabilized=False,
-            previous_error_rate=prev_telemetry.http_error_rate_pct if prev_telemetry else 0.0,
-            current_error_rate=prev_telemetry.http_error_rate_pct if prev_telemetry else 0.0,
-            previous_latency_ms=(prev_telemetry.p99_latency_seconds * 1000)
-            if prev_telemetry
-            else 0.0,
-            current_latency_ms=(prev_telemetry.p99_latency_seconds * 1000)
-            if prev_telemetry
-            else 0.0,
-            observation_window_seconds=30,
+            previous_error_rate=prev_error,
+            current_error_rate=prev_error,
+            previous_latency_ms=prev_latency_ms,
+            current_latency_ms=prev_latency_ms,
+            observation_window_seconds=0,
             details="Remediation not executed; system health remains unverified.",
         )
     else:
-        report = HealthVerificationReport(
-            stabilized=True,
-            previous_error_rate=prev_telemetry.http_error_rate_pct if prev_telemetry else 5.2,
-            current_error_rate=0.01,
-            previous_latency_ms=(prev_telemetry.p99_latency_seconds * 1000)
-            if prev_telemetry
-            else 1200.0,
-            current_latency_ms=135.0,
-            observation_window_seconds=30,
-            details="Metrics stabilized: Error rate dropped to <0.1%, p99 latency normalized to 135ms.",
-        )
+        # Let the rollback settle, then measure only the last minute so pre-rollback errors don't count.
+        await asyncio.sleep(_VERIFY_SETTLE_SECONDS)
+        try:
+            current = await PrometheusService().get_golden_signals(
+                service=state["service"], window_minutes=1
+            )
+        except Exception as exc:
+            logger.warning(f"[Node 9: VerifyHealth] Prometheus probe failed: {exc}")
+            current = None
+
+        if not isinstance(current, GoldenSignalMetrics):
+            report = HealthVerificationReport(
+                stabilized=False,
+                previous_error_rate=prev_error,
+                current_error_rate=prev_error,
+                previous_latency_ms=prev_latency_ms,
+                current_latency_ms=prev_latency_ms,
+                observation_window_seconds=_VERIFY_SETTLE_SECONDS,
+                details="Post-remediation metrics unavailable from Prometheus; health unverified.",
+            )
+        else:
+            # With no requests in the window, the error rate is 0 by arithmetic, not by observation.
+            has_traffic = current.request_rate_per_sec > 0
+            within_thresholds = (
+                current.error_rate_5xx_percent < _STABLE_ERROR_RATE_PCT
+                and current.p95_latency_ms < _STABLE_LATENCY_MS
+            )
+            stabilized = has_traffic and within_thresholds
+            if not has_traffic:
+                outcome = (
+                    "No requests observed in the last minute, so health cannot be verified. "
+                    "Send traffic to the service and verify again."
+                )
+            else:
+                outcome = (
+                    "Within stability thresholds."
+                    if within_thresholds
+                    else "Still above stability thresholds."
+                )
+            report = HealthVerificationReport(
+                stabilized=stabilized,
+                previous_error_rate=prev_error,
+                current_error_rate=current.error_rate_5xx_percent,
+                previous_latency_ms=prev_latency_ms,
+                current_latency_ms=current.p95_latency_ms,
+                observation_window_seconds=_VERIFY_SETTLE_SECONDS,
+                details=(
+                    f"5xx error rate {prev_error:.2f}% -> {current.error_rate_5xx_percent:.2f}%; "
+                    f"p95 latency {prev_latency_ms:.0f}ms -> {current.p95_latency_ms:.0f}ms. {outcome}"
+                ),
+            )
 
     return {
         "verification_results": report,
@@ -423,7 +493,7 @@ async def node_persist_incident_memory(state: InvestigationState) -> dict[str, A
             remediation=remediation,
             outcome=outcome,
         )
-        msg = f"Persisted resolved incident {incident_id} into Qdrant memory"
+        msg = "Persisted resolved incident into Qdrant memory"
     except Exception as exc:
         logger.warning(f"Failed to persist incident memory to Qdrant: {exc}")
         msg = f"Incident memory persistence skipped: {exc}"

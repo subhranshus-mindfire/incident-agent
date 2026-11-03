@@ -1,6 +1,6 @@
-from datetime import UTC, datetime
 import logging
 import os
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -27,57 +27,12 @@ from app.services.remediation_service import get_remediation_executor
 
 logger = logging.getLogger("incident_agent.tools")
 
-DEFAULT_DEPLOYMENT_CATALOG: dict[str, list[DeploymentRecord]] = {
-    "payment-api": [
-        DeploymentRecord(
-            deployment_id="DEP-101",
-            service="payment-api",
-            version="v2.3.1",
-            deployed_at="2026-11-02T10:00:00Z",
-            deployed_by="GitOps Deployer",
-            commit_sha="c3f81e9",
-            status="SUCCESS",
-        ),
-        DeploymentRecord(
-            deployment_id="DEP-100",
-            service="payment-api",
-            version="v2.3.0",
-            deployed_at="2026-11-01T18:00:00Z",
-            deployed_by="GitOps Deployer",
-            commit_sha="a1b2c3d",
-            status="SUCCESS",
-        ),
-    ],
-    "order-service": [
-        DeploymentRecord(
-            deployment_id="DEP-201",
-            service="order-service",
-            version="v1.8.0",
-            deployed_at="2026-11-02T08:30:00Z",
-            deployed_by="GitOps Deployer",
-            commit_sha="f4e5d6c",
-            status="SUCCESS",
-        )
-    ],
-    "auth-service": [
-        DeploymentRecord(
-            deployment_id="DEP-301",
-            service="auth-service",
-            version="v3.1.2",
-            deployed_at="2026-10-31T12:00:00Z",
-            deployed_by="GitOps Deployer",
-            commit_sha="d9e8f7a",
-            status="SUCCESS",
-        )
-    ],
-}
-
 
 async def fetch_application_logs(
     service: str,
     time_range_minutes: int = 15,
 ) -> list[LogSignature]:
-    """Tool 1: Returns deduplicated error log signatures from live Loki or synthetic fallbacks."""
+    """Tool 1: Returns deduplicated error log signatures from live Loki. Empty means none were found."""
     loki = LokiService()
     now = datetime.now(UTC)
     start_time = datetime.fromtimestamp(now.timestamp() - (time_range_minutes * 60), tz=UTC)
@@ -98,35 +53,6 @@ async def fetch_application_logs(
                     )
     except Exception as exc:
         logger.warning(f"Loki fetch failed: {exc}")
-
-    if not signatures:
-        if service == "payment-api":
-            target_url = os.getenv("PAYMENT_API_URL", "http://payment-api:8080")
-            try:
-                async with httpx.AsyncClient(timeout=2.0) as client:
-                    res = await client.get(f"{target_url}/health")
-                    if res.status_code == 200:
-                        health = res.json()
-                        active_chaos = health.get("active_chaos", {})
-                        if active_chaos.get("deadlock"):
-                            return [
-                                LogSignature(
-                                    sample_line="payment-api ERROR 500: Database connection timeout waiting for connection at 10:15 - Connection pool exhausted (max 50 connections reached)",
-                                    count=14,
-                                )
-                            ]
-                        elif active_chaos.get("bad_deployment"):
-                            return [
-                                LogSignature(
-                                    sample_line="payment-api ERROR 500: Fatal regression in v2.3.1 (DEP-101): syntax error in payments_ledger query",
-                                    count=12,
-                                )
-                            ]
-                        elif health.get("status") == "healthy":
-                            return []  # Truly healthy, no errors
-            except Exception:
-                pass
-        return []
 
     return signatures
 
@@ -158,53 +84,14 @@ async def get_system_metrics(
     except Exception as exc:
         logger.warning(f"Prometheus fetch failed: {exc}")
 
-    # Inspect live health of target service before assuming any fault
-    if service == "payment-api":
-        target_url = os.getenv("PAYMENT_API_URL", "http://payment-api:8080")
-        try:
-            async with httpx.AsyncClient(timeout=2.0) as client:
-                res = await client.get(f"{target_url}/health")
-                if res.status_code == 200:
-                    health = res.json()
-                    active_chaos = health.get("active_chaos", {})
-                    if active_chaos.get("deadlock"):
-                        return TelemetrySummary(
-                            http_error_rate_pct=100.0,
-                            p99_latency_seconds=1.45,
-                            request_rate_per_sec=10.0,
-                            cpu_usage_pct=25.0,
-                            memory_usage_pct=35.0,
-                            detected_anomalies=["Database Connection Pool Saturated (50/50)", "High 5xx Error Rate (100%)"],
-                        )
-                    if active_chaos.get("bad_deployment"):
-                        return TelemetrySummary(
-                            http_error_rate_pct=100.0,
-                            p99_latency_seconds=0.85,
-                            request_rate_per_sec=10.0,
-                            cpu_usage_pct=20.0,
-                            memory_usage_pct=30.0,
-                            detected_anomalies=["DEP-101 Query Regression", "High 5xx Error Rate (100%)"],
-                        )
-                    if health.get("status") == "healthy":
-                        return TelemetrySummary(
-                            http_error_rate_pct=0.0,
-                            p99_latency_seconds=0.035,
-                            request_rate_per_sec=25.0,
-                            cpu_usage_pct=12.0,
-                            memory_usage_pct=25.0,
-                            detected_anomalies=[],
-                        )
-        except Exception as exc:
-            logger.debug(f"Target service health probe failed: {exc}")
-
-    # Default baseline for healthy services
+    # Metrics were not measured. Report that instead of inventing a healthy or failing baseline.
     return TelemetrySummary(
         http_error_rate_pct=0.0,
-        p99_latency_seconds=0.035,
-        request_rate_per_sec=20.0,
-        cpu_usage_pct=15.0,
-        memory_usage_pct=30.0,
-        detected_anomalies=[],
+        p99_latency_seconds=0.0,
+        request_rate_per_sec=0.0,
+        cpu_usage_pct=0.0,
+        memory_usage_pct=0.0,
+        detected_anomalies=["Prometheus unavailable: metrics not measured"],
     )
 
 
@@ -219,29 +106,20 @@ async def get_recent_deployments(service: str) -> list[DeploymentRecord]:
                     data = res.json()
                     return [
                         DeploymentRecord(
-                            deployment_id=d.get("deployment_id", "DEP-101"),
+                            deployment_id=d["deployment_id"],
                             service="payment-api",
-                            version=d.get("version", "v2.3.1"),
-                            deployed_at=d.get("deployed_at", datetime.now(UTC).isoformat()),
-                            commit_sha=d.get("commit_sha", "c3f81e9"),
-                            status=d.get("status", "SUCCESS"),
+                            version=d["version"],
+                            deployed_at=d["deployed_at"],
+                            commit_sha=d.get("commit_sha", "unknown"),
+                            status=d.get("status", "UNKNOWN"),
                         )
                         for d in data
                     ]
         except Exception as exc:
             logger.debug(f"Live deployment fetch from payment-api failed: {exc}")
 
-    if service in DEFAULT_DEPLOYMENT_CATALOG:
-        return DEFAULT_DEPLOYMENT_CATALOG[service]
-    return [
-        DeploymentRecord(
-            deployment_id="DEP-GENERIC",
-            service=service,
-            version="v1.0.0",
-            deployed_at=datetime.now(UTC).isoformat(),
-            status="SUCCESS",
-        )
-    ]
+    # No deployment API record: report none rather than a placeholder.
+    return []
 
 
 async def search_past_incidents(
@@ -290,21 +168,95 @@ async def execute_remediation(
         requires_approval=approval_id is None,
     )
 
-    # Live remediation trigger on target microservice if reachable
+    # payment-api is the live target: success is only reported once its health confirms the fix.
     if service == "payment-api":
-        target_url = os.getenv("PAYMENT_API_URL", "http://payment-api:8080")
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                if action_type == RemediationActionType.ROLLBACK_DEPLOYMENT:
-                    await client.post(f"{target_url}/remediation/rollback")
-                elif action_type == RemediationActionType.TERMINATE_DB_TRANSACTIONS:
-                    await client.post(f"{target_url}/remediation/kill-queries")
-                elif action_type == RemediationActionType.ROLLING_RESTART:
-                    await client.post(f"{target_url}/remediation/restart")
-        except Exception as exc:
-            logger.debug(f"Live payment-api remediation hook: {exc}")
+        return await _apply_payment_api_remediation(action_type)
 
     return await executor.execute_action(proposal, dry_run=False)
+
+
+# Remediation endpoint on payment-api for each action.
+_PAYMENT_API_REMEDIATIONS: dict[RemediationActionType, str] = {
+    RemediationActionType.ROLLBACK_DEPLOYMENT: "/remediation/rollback",
+    RemediationActionType.TERMINATE_DB_TRANSACTIONS: "/remediation/kill-queries",
+    RemediationActionType.ROLLING_RESTART: "/remediation/restart",
+}
+
+# Which remediation clears each live fault that payment-api reports on /health.
+FAULT_REMEDIATIONS: dict[str, RemediationActionType] = {
+    "bad_deployment": RemediationActionType.ROLLBACK_DEPLOYMENT,
+    "deadlock": RemediationActionType.TERMINATE_DB_TRANSACTIONS,
+    "cpu_burn": RemediationActionType.ROLLING_RESTART,
+}
+
+
+async def get_active_faults(service: str) -> dict[str, bool] | None:
+    """Fault flags payment-api reports right now. None when the service cannot be reached."""
+    if service != "payment-api":
+        return None
+    target_url = os.getenv("PAYMENT_API_URL", "http://payment-api:8080")
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            res = await client.get(f"{target_url}/health")
+            res.raise_for_status()
+    except httpx.HTTPError as exc:
+        logger.warning(f"payment-api health probe failed: {exc}")
+        return None
+    return {name: bool(on) for name, on in res.json().get("active_chaos", {}).items()}
+
+
+async def _apply_payment_api_remediation(
+    action_type: RemediationActionType,
+) -> RemediationExecutionResult:
+    """Calls payment-api's remediation endpoint and checks its health before reporting success."""
+    if action_type not in _PAYMENT_API_REMEDIATIONS:
+        return RemediationExecutionResult(
+            success=False,
+            action_type=action_type.value,
+            message=f"No payment-api remediation exists for {action_type.value}.",
+        )
+
+    endpoint = _PAYMENT_API_REMEDIATIONS[action_type]
+    target_url = os.getenv("PAYMENT_API_URL", "http://payment-api:8080")
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            applied = await client.post(f"{target_url}{endpoint}")
+            applied.raise_for_status()
+            health = await client.get(f"{target_url}/health")
+            health.raise_for_status()
+    except httpx.HTTPError as exc:
+        logger.error(f"payment-api rejected {action_type.value}: {exc}")
+        return RemediationExecutionResult(
+            success=False,
+            action_type=action_type.value,
+            message=f"payment-api did not apply {action_type.value}: {exc}",
+        )
+
+    # Success means every fault is gone, not just the one this action targets.
+    chaos = health.json().get("active_chaos", {})
+    still_active = [name for name, on in chaos.items() if on]
+    if still_active:
+        hints = ", ".join(
+            f"{name} needs {FAULT_REMEDIATIONS[name].value}"
+            for name in still_active
+            if name in FAULT_REMEDIATIONS
+        )
+        return RemediationExecutionResult(
+            success=False,
+            action_type=action_type.value,
+            message=(
+                f"{action_type.value} applied, but payment-api still reports: {', '.join(still_active)}. "
+                f"{hints}."
+            ),
+            stdout=applied.text,
+        )
+
+    return RemediationExecutionResult(
+        success=True,
+        action_type=action_type.value,
+        message=f"{action_type.value} applied; payment-api health reports no active faults.",
+        stdout=applied.text,
+    )
 
 
 def create_incident_report(incident_state: InvestigationState) -> PostmortemReport:
