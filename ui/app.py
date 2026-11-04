@@ -168,8 +168,6 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "current_incident" not in st.session_state:
     st.session_state.current_incident = None
-if "preset_prompt" not in st.session_state:
-    st.session_state.preset_prompt = None
 
 
 # ---------------------------------------------------------------------------
@@ -196,21 +194,48 @@ def _render_message(role: str, content: str) -> None:
             st.markdown(content)
 
 
-def _is_stale_gate(code: int, resp: Any) -> bool:
-    """True when the API says the investigation is no longer paused at the approval gate."""
-    return code == 400 and isinstance(resp, dict) and resp.get("code") == "INVALID_STATE_TRANSITION"
+# ---------------------------------------------------------------------------
+# ACTIONS — button callbacks run before the page is drawn, so each change shows once
+# ---------------------------------------------------------------------------
+PRESET_QUESTIONS = [
+    "Is payment-api up?",
+    "Investigate payment-api HTTP 500 errors and connection pool timeouts",
+    "Did deployment DEP-101 introduce a regression on payment-api?",
+    "Check golden signals and blast radius for payment-api",
+    "Search past incidents for database connection pool exhaustion",
+]
+WELCOME_PRESETS = [
+    (
+        "Investigate HTTP 500 errors",
+        "Check logs, metrics and recent deploys on payment-api.",
+        "Investigate payment-api HTTP 500 errors. Check logs, metrics, and recent deployments.",
+    ),
+    (
+        "Deployment regression",
+        "Did DEP-101 cause connection pool exhaustion on payment-api?",
+        "Investigate DEP-101 deployment regression on payment-api. Check error rates and Loki stack traces.",
+    ),
+    (
+        "Blast radius",
+        "What does a payment-api failure affect upstream and downstream?",
+        "Examine service dependencies for payment-api. Identify upstream and downstream affected services.",
+    ),
+    (
+        "Past incidents",
+        "Search memory for connection pool timeouts and their fixes.",
+        "Search Qdrant vector memory for past incidents matching database connection pool timeout on payment-api.",
+    ),
+]
 
 
-def _close_stale_gate() -> None:
-    """Drops an approval card whose investigation has already moved on, and explains why in chat."""
+def _queue_prompt(text: str) -> None:
+    st.session_state.pending_prompt = text
+
+
+def _new_chat() -> None:
+    st.session_state.messages = []
     st.session_state.current_incident = None
-    st.session_state.messages.append(
-        {
-            "role": "assistant",
-            "content": "This remediation is no longer waiting for approval. It was already decided, or the workflow has moved on.",
-        }
-    )
-    st.rerun()
+    st.session_state.pop("pending_prompt", None)
 
 
 def _verification_markdown(report: Any) -> str:
@@ -230,29 +255,189 @@ def _verification_markdown(report: Any) -> str:
     )
 
 
+def _approval_outcome(action: str, resp: dict[str, Any]) -> str:
+    state = resp.get("state", {})
+    exec_res = state.get("execution_result") or {}
+    ok = bool(exec_res.get("success", False))
+    postmortem = state.get("postmortem") or {}
+    postmortem_md = (
+        postmortem.get("markdown_content", "") if isinstance(postmortem, dict) else str(postmortem)
+    )
+    return (
+        f"### Remediation {'executed' if ok else 'failed'}\n\n"
+        "| Field | Value |\n|-------|-------|\n"
+        f"| Action | `{exec_res.get('action_type', action)}` |\n"
+        f"| Status | `{'SUCCESS' if ok else 'FAILED'}` |\n"
+        f"| Output | {exec_res.get('message', 'No execution result was returned.')} |\n\n"
+        f"{_verification_markdown(state.get('verification_report'))}\n\n"
+        "Incident indexed into Qdrant vector memory.\n\n---\n\n"
+        f"{postmortem_md}"
+    )
+
+
+def _decide(decision: str, reason: str) -> None:
+    """Approve, reject or request more diagnostics for the pending remediation. Runs as a button callback."""
+    inc = st.session_state.current_incident
+    if not inc:
+        return
+    code, resp = api_request(
+        "POST",
+        f"{AGENT_API_URL}/api/v1/investigations/{inc['id']}/{decision}",
+        data={"reason": reason},
+    )
+    if _is_stale_gate(code, resp):
+        st.session_state.current_incident = None
+        st.session_state.messages.append(
+            {
+                "role": "assistant",
+                "content": "This remediation is no longer waiting for approval. It was already decided, or the workflow has moved on.",
+            }
+        )
+        return
+    if code != 200:
+        st.session_state.notice = ("error", f"{decision.capitalize()} failed: {resp}")
+        return
+    if decision == "approve":
+        content = _approval_outcome(inc["proposal"].get("action_type", ""), resp)
+        st.session_state.current_incident = None
+    elif decision == "reject":
+        content = (
+            "### Remediation rejected\n\nWorkflow finished safely — no production changes made."
+        )
+        st.session_state.current_incident = None
+    else:
+        content = "Expanding diagnostics — routing into `node_expand_diagnostics` for deeper telemetry analysis."
+    st.session_state.messages.append({"role": "assistant", "content": content})
+
+
+def _is_stale_gate(code: int, resp: Any) -> bool:
+    """True when the API says the investigation is no longer paused at the approval gate."""
+    return code == 400 and isinstance(resp, dict) and resp.get("code") == "INVALID_STATE_TRANSITION"
+
+
+# ---------------------------------------------------------------------------
+# RENDERING
+# ---------------------------------------------------------------------------
+def _render_approval_card(incident_id: str, proposal: dict[str, Any], pending: bool) -> None:
+    def field(key: str, default: str) -> str:
+        return (
+            str(proposal.get(key, default))
+            .replace("RemediationActionType.", "")
+            .replace("RiskTier.", "")
+        )
+
+    st.markdown(
+        '<div class="approval-card">'
+        '<div class="approval-title">Approval needed before remediation</div>'
+        f'<div class="approval-row"><span>Action</span><code>{field("action_type", "ROLLBACK_DEPLOYMENT")}</code></div>'
+        f'<div class="approval-row"><span>Risk</span><span>{field("risk_tier", "CRITICAL")}</span></div>'
+        f'<div class="approval-row"><span>Rationale</span><span>{field("rationale", "Proposed to resolve detected root cause.")}</span></div>'
+        f'<div class="approval-row"><span>Rollback</span><span>{field("rollback_plan", "Revert to previous stable version.")}</span></div>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    if not pending:
+        return
+    approve_col, reject_col, diag_col = st.columns([1.5, 1, 1.3])
+    with approve_col:
+        st.button(
+            "Approve & execute",
+            type="primary",
+            use_container_width=True,
+            key=f"approve_{incident_id}",
+            on_click=_decide,
+            args=("approve", "Approved by operator"),
+        )
+    with reject_col:
+        st.button(
+            "Reject",
+            use_container_width=True,
+            key=f"reject_{incident_id}",
+            on_click=_decide,
+            args=("reject", "Rejected by operator"),
+        )
+    with diag_col:
+        st.button(
+            "More diagnostics",
+            use_container_width=True,
+            key=f"diagnostics_{incident_id}",
+            on_click=_decide,
+            args=("diagnostics", "Additional diagnostics requested."),
+        )
+
+
+def _render_history() -> None:
+    """Draws the whole conversation in order. Only the pending approval card has working buttons."""
+    pending_id = (st.session_state.current_incident or {}).get("id")
+    for msg in st.session_state.messages:
+        if msg.get("kind") == "approval":
+            _render_approval_card(
+                msg["incident_id"], msg["proposal"], pending=msg["incident_id"] == pending_id
+            )
+        else:
+            _render_message(msg["role"], msg["content"])
+
+
+def _answer(prompt: str) -> None:
+    """Sends one question to the backend and draws the new exchange. Saved messages are drawn by _render_history."""
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    st.markdown(_user_bubble(prompt), unsafe_allow_html=True)
+    history = [
+        {"role": m["role"], "content": m["content"]}
+        for m in st.session_state.messages[:-1]
+        if m.get("role") in ("user", "assistant") and m.get("kind") is None
+    ][-20:]
+    with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
+        with st.spinner("Checking live telemetry… a local model can take a minute."):
+            code, resp = api_request(
+                "POST",
+                f"{AGENT_API_URL}/api/v1/chat",
+                data={
+                    "message": prompt,
+                    "history": history,
+                    "approval_pending": st.session_state.current_incident is not None,
+                },
+                timeout=300.0,
+            )
+        reply = (
+            str(resp.get("reply", ""))
+            if code == 200
+            else f"❌ The agent request failed (HTTP {code}): {resp}"
+        )
+        st.write_stream(_stream_text(reply))
+    st.session_state.messages.append({"role": "assistant", "content": reply})
+
+    incident = resp.get("incident") if code == 200 else None
+    if incident and incident.get("awaiting_approval") and incident.get("remediation_proposal"):
+        proposal = incident["remediation_proposal"]
+        st.session_state.messages.append(
+            {
+                "role": "assistant",
+                "kind": "approval",
+                "incident_id": incident["incident_id"],
+                "proposal": proposal,
+            }
+        )
+        st.session_state.current_incident = {"id": incident["incident_id"], "proposal": proposal}
+        _render_approval_card(incident["incident_id"], proposal, pending=True)
+
+
 # ---------------------------------------------------------------------------
 # SIDEBAR
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.markdown('<div class="brand">✦ Incident Agent</div>', unsafe_allow_html=True)
-
-    if st.button("＋  New chat", key="new_chat", use_container_width=True):
-        st.session_state.messages = []
-        st.session_state.current_incident = None
-        st.rerun()
+    st.button("＋  New chat", key="new_chat", use_container_width=True, on_click=_new_chat)
 
     st.markdown('<div class="side-label">Try asking</div>', unsafe_allow_html=True)
-    suggested = [
-        "Is payment-api up?",
-        "Investigate payment-api HTTP 500 errors and connection pool timeouts",
-        "Did deployment DEP-101 introduce a regression on payment-api?",
-        "Check golden signals and blast radius for payment-api",
-        "Search past incidents for database connection pool exhaustion",
-    ]
-    for idx, q in enumerate(suggested):
-        if st.button(q, key=f"sq_{idx}", use_container_width=True):
-            st.session_state.preset_prompt = q
-            st.rerun()
+    for idx, question in enumerate(PRESET_QUESTIONS):
+        st.button(
+            question,
+            key=f"sq_{idx}",
+            use_container_width=True,
+            on_click=_queue_prompt,
+            args=(question,),
+        )
 
     pay_ok = ping_endpoint(f"{PAYMENT_API_URL}/health")
     dot_color = "#10A37F" if pay_ok else "#EF4444"
@@ -264,9 +449,13 @@ with st.sidebar:
 
 
 # ---------------------------------------------------------------------------
-# WELCOME — shown when there are no messages
+# PAGE — one ordered pass: welcome or history, then the new exchange
 # ---------------------------------------------------------------------------
-if not st.session_state.messages:
+queued = st.session_state.pop("pending_prompt", None)
+typed = st.chat_input("Ask about a service or describe an incident…")
+prompt = (queued or typed or "").strip()
+
+if not st.session_state.messages and not prompt:
     st.markdown(
         '<div class="hero"><div class="hero-mark">✦</div>'
         "<h2>What's happening with your services?</h2>"
@@ -274,199 +463,22 @@ if not st.session_state.messages:
         "</div>",
         unsafe_allow_html=True,
     )
-
-    g1, g2 = st.columns(2)
-    g3, g4 = st.columns(2)
-
-    with g1:
-        if st.button(
-            "Investigate HTTP 500 errors\nCheck logs, metrics and recent deploys on payment-api.",
-            key="hero_g1",
-            use_container_width=True,
-        ):
-            st.session_state.preset_prompt = "Investigate payment-api HTTP 500 errors. Check logs, metrics, and recent deployments."
-            st.rerun()
-    with g2:
-        if st.button(
-            "Deployment regression\nDid DEP-101 cause connection pool exhaustion on payment-api?",
-            key="hero_g2",
-            use_container_width=True,
-        ):
-            st.session_state.preset_prompt = "Investigate DEP-101 deployment regression on payment-api. Check error rates and Loki stack traces."
-            st.rerun()
-    with g3:
-        if st.button(
-            "Blast radius\nWhat does a payment-api failure affect upstream and downstream?",
-            key="hero_g3",
-            use_container_width=True,
-        ):
-            st.session_state.preset_prompt = "Examine service dependencies for payment-api. Identify upstream and downstream affected services."
-            st.rerun()
-    with g4:
-        if st.button(
-            "Past incidents\nSearch memory for connection pool timeouts and their fixes.",
-            key="hero_g4",
-            use_container_width=True,
-        ):
-            st.session_state.preset_prompt = "Search Qdrant vector memory for past incidents matching database connection pool timeout on payment-api."
-            st.rerun()
-
-# ---------------------------------------------------------------------------
-# CHAT HISTORY
-# ---------------------------------------------------------------------------
-for msg in st.session_state.messages:
-    _render_message(msg["role"], msg["content"])
-
-# ---------------------------------------------------------------------------
-# HITL APPROVAL CARD
-# ---------------------------------------------------------------------------
-if st.session_state.current_incident:
-    inc = st.session_state.current_incident
-    p = inc.get("proposal", {})
-
-    def _g(obj: Any, key: str, default: Any = "") -> Any:
-        if isinstance(obj, dict):
-            return obj.get(key, default)
-        return getattr(obj, key, default)
-
-    action = str(_g(p, "action_type", "ROLLBACK_DEPLOYMENT")).replace("RemediationActionType.", "")
-    risk = str(_g(p, "risk_tier", "CRITICAL")).replace("RiskTier.", "")
-    rationale = str(_g(p, "rationale", "Proposed to resolve detected root cause."))
-    rollback = str(_g(p, "rollback_plan", "Revert to previous stable version."))
-
-    st.markdown(
-        '<div class="approval-card">'
-        '<div class="approval-title">Approval needed before remediation</div>'
-        f'<div class="approval-row"><span>Action</span><code>{action}</code></div>'
-        f'<div class="approval-row"><span>Risk</span><span>{risk}</span></div>'
-        f'<div class="approval-row"><span>Rationale</span><span>{rationale}</span></div>'
-        f'<div class="approval-row"><span>Rollback</span><span>{rollback}</span></div>'
-        "</div>",
-        unsafe_allow_html=True,
-    )
-
-    hc1, hc2, hc3 = st.columns([1.5, 1, 1.3])
-    with hc1:
-        if st.button("Approve & execute", type="primary", use_container_width=True, key="hitl_app"):
-            code, resp = api_request(
-                "POST",
-                f"{AGENT_API_URL}/api/v1/investigations/{inc['id']}/approve",
-                data={"reason": "Approved by operator"},
+    columns = st.columns(2) + st.columns(2)
+    for column, (title, detail, question) in zip(columns, WELCOME_PRESETS, strict=True):
+        with column:
+            st.button(
+                f"{title}\n{detail}",
+                key=f"hero_{title}",
+                use_container_width=True,
+                on_click=_queue_prompt,
+                args=(question,),
             )
-            if code == 200:
-                state = resp.get("state", {})
-                exec_res = state.get("execution_result", {})
-                postmortem = state.get("postmortem") or {}
-                # The API returns a PostmortemReport; show its Markdown, not the raw object
-                postmortem_md = (
-                    postmortem.get("markdown_content", "")
-                    if isinstance(postmortem, dict)
-                    else str(postmortem)
-                )
-                verify_md = _verification_markdown(state.get("verification_report"))
-                ex_action = _g(exec_res, "action_type", action)
-                ex_ok = bool(_g(exec_res, "success", False))
-                ex_status = "SUCCESS" if ex_ok else "FAILED"
-                ex_output = _g(exec_res, "message", "No execution result was returned.")
-                content = (
-                    f"### Remediation {'executed' if ex_ok else 'failed'}\n\n"
-                    f"| Field | Value |\n|-------|-------|\n"
-                    f"| Action | `{ex_action}` |\n"
-                    f"| Status | `{ex_status}` |\n"
-                    f"| Output | {ex_output} |\n\n"
-                    f"{verify_md}\n\n"
-                    f"Incident indexed into Qdrant vector memory.\n\n---\n\n{postmortem_md}"
-                )
-                st.session_state.messages.append({"role": "assistant", "content": content})
-                st.session_state.current_incident = None
-                st.rerun()
-            elif _is_stale_gate(code, resp):
-                _close_stale_gate()
-            else:
-                st.error(f"Approval failed: {resp}")
 
-    with hc2:
-        if st.button("Reject", use_container_width=True, key="hitl_rej"):
-            code, resp = api_request(
-                "POST",
-                f"{AGENT_API_URL}/api/v1/investigations/{inc['id']}/reject",
-                data={"reason": "Rejected by operator"},
-            )
-            if code == 200:
-                content = (
-                    "### Remediation rejected\n\n"
-                    "Workflow finished safely — no production changes made."
-                )
-                st.session_state.messages.append({"role": "assistant", "content": content})
-                st.session_state.current_incident = None
-                st.rerun()
-            elif _is_stale_gate(code, resp):
-                _close_stale_gate()
-            else:
-                st.error(f"Rejection failed: {resp}")
+_render_history()
 
-    with hc3:
-        if st.button("More diagnostics", use_container_width=True, key="hitl_diag"):
-            code, _ = api_request(
-                "POST",
-                f"{AGENT_API_URL}/api/v1/investigations/{inc['id']}/diagnostics",
-                data={"reason": "Additional diagnostics requested."},
-            )
-            if code == 200:
-                st.session_state.messages.append(
-                    {
-                        "role": "assistant",
-                        "content": "Expanding diagnostics — routing into `node_expand_diagnostics` for deeper telemetry analysis.",
-                    }
-                )
-                st.rerun()
-            elif _is_stale_gate(code, _):
-                _close_stale_gate()
+notice = st.session_state.pop("notice", None)
+if notice:
+    st.error(notice[1]) if notice[0] == "error" else st.success(notice[1])
 
-# ---------------------------------------------------------------------------
-# CHAT INPUT
-# ---------------------------------------------------------------------------
-user_prompt = st.chat_input("Ask about a service or describe an incident…")
-
-if st.session_state.preset_prompt:
-    user_prompt = st.session_state.preset_prompt
-    st.session_state.preset_prompt = None
-
-if user_prompt:
-    prompt = user_prompt.strip()
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    st.markdown(_user_bubble(prompt), unsafe_allow_html=True)
-    # The backend decides how to answer: greeting, live telemetry, or the agent
-    history = [
-        {"role": m["role"], "content": m["content"]}
-        for m in st.session_state.messages[:-1]
-        if m.get("role") in ("user", "assistant")
-    ][-20:]
-    with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
-        with st.spinner("Checking live telemetry…"):
-            code, resp = api_request(
-                "POST",
-                f"{AGENT_API_URL}/api/v1/chat",
-                data={
-                    "message": prompt,
-                    "history": history,
-                    "approval_pending": st.session_state.current_incident is not None,
-                },
-                timeout=180.0,
-            )
-        if code == 200:
-            reply = str(resp.get("reply", ""))
-        else:
-            reply = f"❌ The agent request failed (HTTP {code}): {resp}"
-        st.write_stream(_stream_text(reply))
-
-    st.session_state.messages.append({"role": "assistant", "content": reply})
-
-    # A new investigation waiting at the approval gate gets the approval card
-    incident = resp.get("incident") if code == 200 else None
-    if incident and incident.get("awaiting_approval") and incident.get("remediation_proposal"):
-        st.session_state.current_incident = {
-            "id": incident["incident_id"],
-            "proposal": incident["remediation_proposal"],
-        }
-        st.rerun()
+if prompt:
+    _answer(prompt)
