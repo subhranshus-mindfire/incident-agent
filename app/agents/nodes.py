@@ -369,7 +369,7 @@ async def node_await_approval(state: InvestigationState) -> dict[str, Any]:
 
     return {
         "audit_events": [
-            f"HITL approval gate reached. Current status: {status.value if status else 'unknown'}"
+            f"HITL approval gate reached. Current status: {str(status) if status else 'unknown'}"
         ]
     }
 

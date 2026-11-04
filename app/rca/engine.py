@@ -240,7 +240,7 @@ class SREInvestigationEngine:
         )
 
         markdown = f"""# Incident Postmortem Report
-**Service:** `{service}` | **Severity:** `{state["severity"].value.upper()}` | **Status:** `{state["status"].value.upper()}`
+**Service:** `{service}` | **Severity:** `{str(state["severity"]).upper()}` | **Status:** `{str(state["status"]).upper()}`
 
 ---
 
