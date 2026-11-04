@@ -3,8 +3,12 @@ from typing import Any, Literal
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
+from psycopg import AsyncConnection
+from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
 
 from app.agents.nodes import (
     node_assess_blast_radius,
@@ -20,9 +24,46 @@ from app.agents.nodes import (
     node_retrieve_qdrant,
     node_verify_health,
 )
+from app.config.config import settings
 from app.schemas.agent_state import ApprovalStatus, InvestigationState
 
 logger = logging.getLogger("incident_agent.agents.graph")
+
+
+def build_checkpointer() -> BaseCheckpointSaver[Any]:
+    """Durable PostgreSQL checkpointer, so paused approvals survive restarts and workers.
+
+    The pool is not opened here: it needs the running event loop, so the app lifespan
+    calls open_checkpointer(). Tests use in-memory state and need no database.
+    """
+    if settings.ENVIRONMENT == "test":
+        return MemorySaver()
+
+    # psycopg takes a plain libpq URL, not the SQLAlchemy "+asyncpg" driver form.
+    conninfo = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://", 1)
+    pool: AsyncConnectionPool[AsyncConnection[dict[str, Any]]] = AsyncConnectionPool(
+        conninfo=conninfo,
+        max_size=10,
+        open=False,
+        kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
+    )
+    return AsyncPostgresSaver(pool)
+
+
+async def open_checkpointer() -> None:
+    """Opens the checkpoint pool and creates LangGraph's tables if they are missing."""
+    saver = get_investigation_graph().checkpointer
+    if isinstance(saver, AsyncPostgresSaver) and isinstance(saver.conn, AsyncConnectionPool):
+        await saver.conn.open()
+        await saver.setup()
+        logger.info("PostgreSQL checkpointer ready for LangGraph investigation state.")
+
+
+async def close_checkpointer() -> None:
+    """Closes the checkpoint pool on shutdown."""
+    saver = get_investigation_graph().checkpointer
+    if isinstance(saver, AsyncPostgresSaver) and isinstance(saver.conn, AsyncConnectionPool):
+        await saver.conn.close()
 
 
 def route_evidence_sufficiency(
@@ -159,7 +200,7 @@ def create_investigation_graph(
     workflow.add_edge("persist_incident_memory", "generate_postmortem")
     workflow.add_edge("generate_postmortem", END)
 
-    saver = checkpointer if checkpointer is not None else MemorySaver()
+    saver = checkpointer if checkpointer is not None else build_checkpointer()
 
     # Compile with interruption gate before 'await_approval'
     return workflow.compile(

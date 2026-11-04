@@ -7,6 +7,7 @@ from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
 
+from app.agents.graph import close_checkpointer, open_checkpointer
 from app.config.config import settings
 from app.config.database import close_db
 from app.utils.http_client import close_shared_http_client, get_shared_http_client
@@ -50,6 +51,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as ex:
         logger.warning("Automated migration check encountered an issue: %s", ex)
 
+    # Paused approvals live in this store, so failing to open it must stop startup.
+    await open_checkpointer()
+
     # Initialize Qdrant collection and seed runbooks in non-test environments
     if settings.ENVIRONMENT != "test":
         try:
@@ -72,6 +76,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     await close_shared_qdrant_service()
     await close_shared_http_client()
+    try:
+        await close_checkpointer()
+    except Exception as ex:
+        logger.warning("Error during checkpointer shutdown: %s", ex)
     try:
         await close_db()
     except Exception as ex:
