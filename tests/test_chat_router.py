@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.agents.router import greeting_reply, resolve_follow_up, route_message
+from app.constants.chat import APPROVAL_REPLY
 from app.schemas.telemetry import GoldenSignalMetrics
 from app.services.live_status import (
     HealthProbe,
@@ -197,3 +198,18 @@ async def test_dependency_question_for_payment_api_lists_downstream() -> None:
 async def test_dependency_question_without_known_service_goes_to_agent() -> None:
     routed = await route_message("What depends on the billing system?", [])
     assert routed.reply is None
+
+
+async def test_request_to_act_while_card_pending_points_to_card() -> None:
+    routed = await route_message("Okay Please have a fix", [], approval_pending=True)
+    assert routed.reply == APPROVAL_REPLY
+
+
+async def test_question_while_card_pending_is_not_intercepted() -> None:
+    routed = await route_message("What is the deadlock?", [], approval_pending=True)
+    assert routed.reply != APPROVAL_REPLY
+
+
+async def test_fix_request_without_pending_card_is_not_intercepted() -> None:
+    routed = await route_message("Okay Please have a fix", [])
+    assert routed.reply != APPROVAL_REPLY

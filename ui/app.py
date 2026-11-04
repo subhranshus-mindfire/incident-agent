@@ -447,7 +447,11 @@ if user_prompt:
             code, resp = api_request(
                 "POST",
                 f"{AGENT_API_URL}/api/v1/chat",
-                data={"message": prompt, "history": history},
+                data={
+                    "message": prompt,
+                    "history": history,
+                    "approval_pending": st.session_state.current_incident is not None,
+                },
                 timeout=180.0,
             )
         if code == 200:

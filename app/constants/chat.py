@@ -60,6 +60,11 @@ AFFIRMATIVE_PATTERN: Final = re.compile(
     r"^(?:yes|yep|yeah|yup|ok|okay|sure|approve|approved|proceed|confirm)[.!]*$", re.IGNORECASE
 )
 
+# Asking to act on the approval card on screen, e.g. "please have a fix". Questions are excluded.
+APPROVAL_INTENT_PATTERN: Final = re.compile(
+    r"\b(?:fix|approve|proceed|execute|apply|remediate|go ahead|do it)\b", re.IGNORECASE
+)
+
 APPROVAL_WAITING_MARKERS: Final = (
     "awaiting human approval",
     "approval needed",

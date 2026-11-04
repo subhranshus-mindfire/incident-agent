@@ -16,6 +16,7 @@ class ChatTurn(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
     history: list[ChatTurn] = Field(default_factory=list, max_length=30)
+    approval_pending: bool = False
 
 
 @router.post(
@@ -26,4 +27,8 @@ class ChatRequest(BaseModel):
 )
 async def chat(payload: ChatRequest) -> dict[str, Any]:
     """Answers a free-form question using live telemetry tools; may open an investigation."""
-    return await run_chat(payload.message, [turn.model_dump() for turn in payload.history])
+    return await run_chat(
+        payload.message,
+        [turn.model_dump() for turn in payload.history],
+        payload.approval_pending,
+    )

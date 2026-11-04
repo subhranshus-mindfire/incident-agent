@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from app.constants.chat import (
     AFFIRMATIVE_PATTERN,
+    APPROVAL_INTENT_PATTERN,
     APPROVAL_REPLY,
     APPROVAL_WAITING_MARKERS,
     FOLLOWUP_FIX_PATTERN,
@@ -60,7 +61,12 @@ def _awaiting_approval(history: list[dict[str, str]]) -> bool:
     return any(marker in last_reply.lower() for marker in APPROVAL_WAITING_MARKERS)
 
 
-async def route_message(message: str, history: list[dict[str, str]]) -> RoutedMessage:
+async def route_message(
+    message: str, history: list[dict[str, str]], approval_pending: bool = False
+) -> RoutedMessage:
+    # The approval card is on screen, so a request to act on it is answered by pointing to the card.
+    if approval_pending and APPROVAL_INTENT_PATTERN.search(message) and "?" not in message:
+        return RoutedMessage(text=message.strip(), reply=APPROVAL_REPLY)
     if AFFIRMATIVE_PATTERN.match(message.strip()) and _awaiting_approval(history):
         return RoutedMessage(text=message.strip(), reply=APPROVAL_REPLY)
 
