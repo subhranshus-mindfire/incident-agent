@@ -8,18 +8,27 @@ from typing import Any
 import httpx
 
 from app.config.config import settings
-from app.core.http_client import get_shared_http_client
+from app.constants.patterns import (
+    SERVICE_IDENTIFIER_PATTERN,
+)
 from app.exceptions.domain import ExternalServiceException
 from app.schemas.telemetry import (
     LogEntry,
     LogQueryResult,
     LogStream,
 )
+from app.utils.http_client import get_shared_http_client
 
 logger = logging.getLogger("incident_agent.loki_service")
 
 # Strict identifier validation for LogQL label injection defense
-SERVICE_IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z0-9_\-\.]+$")
+
+
+def service_selector(service: str) -> str:
+    """A LogQL stream selector for one service. The name is validated first, so it cannot change the query."""
+    if not SERVICE_IDENTIFIER_PATTERN.match(service.strip()):
+        raise ValueError(f"Invalid service identifier '{service}'.")
+    return f'{{service="{service.strip()}"}}'
 
 
 class LokiService:
@@ -121,7 +130,8 @@ class LokiService:
                 r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[^\s]*", "TIMESTAMP", signature
             )
             signature = re.sub(r"\b\d+\b", "NUM", signature)
-            fingerprint = hashlib.md5(signature.encode("utf-8")).hexdigest()
+            # Grouping key only, not a security measure.
+            fingerprint = hashlib.md5(signature.encode("utf-8"), usedforsecurity=False).hexdigest()
 
             if fingerprint in clustered:
                 clustered[fingerprint].dedup_count += 1
@@ -290,5 +300,6 @@ class LokiService:
             client = self._get_client()
             res = await client.get(f"{self.base_url}/ready", timeout=3.0)
             return res.status_code == 200
-        except Exception:
+        except httpx.HTTPError as exc:
+            logger.debug("Loki health check failed: %s", exc)
             return False

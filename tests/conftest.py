@@ -8,8 +8,13 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from app.auth.passwords import hash_password
+from app.auth.sessions import create_session
 from app.config.database import Base, get_db_session
 from app.main import app
+from app.models.user import User
+from app.services import clients
+from app.utils.http_client import close_shared_http_client
 
 # Isolated in-memory async SQLite engine for lightning-fast testing
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -51,8 +56,28 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
 
     app.dependency_overrides[get_db_session] = override_get_db_session
 
+    # A signed-in test user, so authenticated routes and actor attribution run as they do in production.
+    db_session.add(User(username="test-user", password_hash=hash_password("test-password-123")))
+    await db_session.commit()
+    token = await create_session(db_session, "test-user")
+
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as async_client:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers={"Authorization": f"Bearer {token}"},
+    ) as async_client:
         yield async_client
 
     app.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def fresh_shared_clients() -> AsyncGenerator[None, None]:
+    """Shared HTTP clients are bound to the event loop that created them, so each test builds its own."""
+    clients.get_prometheus_service.cache_clear()
+    clients.get_loki_service.cache_clear()
+    yield
+    await close_shared_http_client()
+    clients.get_prometheus_service.cache_clear()
+    clients.get_loki_service.cache_clear()

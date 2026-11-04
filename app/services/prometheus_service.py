@@ -1,13 +1,19 @@
 import asyncio
 import logging
-import re
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 
 from app.config.config import settings
-from app.core.http_client import get_shared_http_client
+from app.constants.patterns import (
+    SERVICE_IDENTIFIER_PATTERN,
+)
+from app.constants.thresholds import (
+    CPU_ALERT_PCT,
+    ERROR_RATE_CRITICAL_PCT,
+    MEMORY_CRITICAL_PCT,
+)
 from app.exceptions.domain import ExternalServiceException
 from app.schemas.telemetry import (
     AnomalyAlert,
@@ -16,11 +22,9 @@ from app.schemas.telemetry import (
     MetricQueryResult,
     MetricSeries,
 )
+from app.utils.http_client import get_shared_http_client
 
 logger = logging.getLogger("incident_agent.prometheus_service")
-
-# Strict identifier validation for PromQL label injection defense
-SERVICE_IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z0-9_\-\.]+$")
 
 
 class PrometheusService:
@@ -184,28 +188,32 @@ class PrometheusService:
         data = await self._execute_with_retry("/api/v1/query_range", params)
         return self._parse_metric_result(promql, data)
 
-    async def _query_single_value(self, promql: str, default: float = 0.0) -> float:
-        """Helper to extract a single scalar/vector value safely."""
+    async def _query_single_value(self, promql: str) -> float | None:
+        """A single value from a PromQL query, or None when there is no data or the query failed."""
         try:
             res = await self.query(promql)
             if res.series and res.series[0].points:
                 val = res.series[0].points[0].value
-                # Filter out NaN / Inf
-                if val != val or val == float("inf") or val == float("-inf"):
-                    return default
+                # NaN and infinity are not measurements
+                if val != val or val in (float("inf"), float("-inf")):
+                    return None
                 return val
         except Exception as ex:
             logger.debug("Metric query failed or returned no data (%s): %s", promql, ex)
-        return default
+        return None
 
     async def get_golden_signals(
         self,
         service: str,
         window_minutes: int = 15,
+        window_seconds: int | None = None,
     ) -> GoldenSignalMetrics:
-        """Computes Google SRE Golden Signals for a given service."""
+        """Computes Google SRE Golden Signals for a given service.
+
+        `window_seconds`, when given, overrides `window_minutes` for live, short-range questions.
+        """
         safe_service = self._validate_service(service)
-        window = f"{window_minutes}m"
+        window = f"{window_seconds}s" if window_seconds else f"{window_minutes}m"
 
         # Injection-safe PromQL queries for Golden Signals
         err_query = (
@@ -214,19 +222,29 @@ class PrometheusService:
         )
         rate_query = f'sum(rate(http_requests_total{{service="{safe_service}"}}[{window}]))'
         lat_query = f'histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{{service="{safe_service}"}}[{window}])) by (le)) * 1000'
-        cpu_query = f'avg(rate(container_cpu_usage_seconds_total{{container="{safe_service}",container!=""}}[{window}])) * 100'
+        # Process CPU from the service's own /metrics endpoint (job label = service name).
+        cpu_query = f'sum(rate(process_cpu_seconds_total{{job="{safe_service}"}}[{window}])) * 100'
         mem_query = (
             f'sum(container_memory_working_set_bytes{{container="{safe_service}"}}) '
             f'/ (sum(container_spec_memory_limit_bytes{{container="{safe_service}"}}) + 1) * 100'
         )
 
-        error_rate, req_rate, p95_lat, cpu_pct, mem_pct = await asyncio.gather(
-            self._query_single_value(err_query, default=0.0),
-            self._query_single_value(rate_query, default=0.0),
-            self._query_single_value(lat_query, default=0.0),
-            self._query_single_value(cpu_query, default=0.0),
-            self._query_single_value(mem_query, default=0.0),
+        names = [
+            "error_rate_5xx_percent",
+            "request_rate_per_sec",
+            "p95_latency_ms",
+            "cpu_usage_percent",
+            "memory_usage_percent",
+        ]
+        results = await asyncio.gather(
+            self._query_single_value(err_query),
+            self._query_single_value(rate_query),
+            self._query_single_value(lat_query),
+            self._query_single_value(cpu_query),
+            self._query_single_value(mem_query),
         )
+        missing = [name for name, value in zip(names, results, strict=True) if value is None]
+        error_rate, req_rate, p95_lat, cpu_pct, mem_pct = (0.0 if v is None else v for v in results)
 
         return GoldenSignalMetrics(
             service=safe_service,
@@ -235,6 +253,7 @@ class PrometheusService:
             p95_latency_ms=round(max(0.0, p95_lat), 2),
             cpu_usage_percent=round(max(0.0, min(100.0, cpu_pct)), 2),
             memory_usage_percent=round(max(0.0, min(100.0, mem_pct)), 2),
+            missing_signals=missing,
             collected_at=datetime.now(UTC),
         )
 
@@ -248,14 +267,14 @@ class PrometheusService:
         anomalies: list[AnomalyAlert] = []
 
         # 1. 5xx Error Rate Check (>5% warning, >15% critical)
-        if signals.error_rate_5xx_percent >= 5.0:
+        if signals.error_rate_5xx_percent >= ERROR_RATE_CRITICAL_PCT:
             severity = "critical" if signals.error_rate_5xx_percent >= 15.0 else "warning"
             anomalies.append(
                 AnomalyAlert(
                     metric_name="http_5xx_error_rate",
                     current_value=signals.error_rate_5xx_percent,
                     baseline_value=0.5,
-                    threshold_value=5.0,
+                    threshold_value=ERROR_RATE_CRITICAL_PCT,
                     is_breached=True,
                     severity=severity,
                     message=f"HTTP 5xx error rate is elevated at {signals.error_rate_5xx_percent}% (threshold: 5.0%)",
@@ -278,22 +297,22 @@ class PrometheusService:
             )
 
         # 3. CPU Saturation (>85% warning, >95% critical)
-        if signals.cpu_usage_percent >= 85.0:
+        if signals.cpu_usage_percent >= CPU_ALERT_PCT:
             severity = "critical" if signals.cpu_usage_percent >= 95.0 else "warning"
             anomalies.append(
                 AnomalyAlert(
                     metric_name="cpu_usage_percent",
                     current_value=signals.cpu_usage_percent,
                     baseline_value=30.0,
-                    threshold_value=85.0,
+                    threshold_value=CPU_ALERT_PCT,
                     is_breached=True,
                     severity=severity,
-                    message=f"CPU utilization is at {signals.cpu_usage_percent}% (threshold: 85.0%)",
+                    message=f"CPU utilization is at {signals.cpu_usage_percent}% (threshold: {CPU_ALERT_PCT}%)",
                 )
             )
 
         # 4. Memory Saturation (>85% warning, >95% critical)
-        if signals.memory_usage_percent >= 85.0:
+        if signals.memory_usage_percent >= MEMORY_CRITICAL_PCT:
             severity = "critical" if signals.memory_usage_percent >= 95.0 else "warning"
             anomalies.append(
                 AnomalyAlert(
@@ -315,5 +334,6 @@ class PrometheusService:
             client = self._get_client()
             res = await client.get(f"{self.base_url}/-/healthy", timeout=3.0)
             return res.status_code == 200
-        except Exception:
+        except httpx.HTTPError as exc:
+            logger.debug("Prometheus health check failed: %s", exc)
             return False

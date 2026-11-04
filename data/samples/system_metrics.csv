@@ -1,0 +1,6 @@
+timestamp,service,error_rate,latency_ms,cpu_pct,memory_pct
+2026-11-02T10:00:00Z,payment-api,0.2,42,18,31
+2026-11-02T10:05:00Z,payment-api,1.1,180,24,33
+2026-11-02T10:10:00Z,payment-api,6.8,910,41,38
+2026-11-02T10:15:00Z,payment-api,31.5,2300,57,44
+2026-11-02T10:20:00Z,payment-api,44.0,2900,63,47

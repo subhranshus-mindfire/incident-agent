@@ -5,11 +5,11 @@ import httpx
 import pytest
 from qdrant_client import AsyncQdrantClient
 
-from app.constants.default_runbooks import DEFAULT_PRODUCTION_RUNBOOKS
 from app.constants.enums import IncidentSeverity
 from app.main import app
 from app.routes.runbooks import get_qdrant_service
 from app.schemas.runbook import Runbook, RunbookCreate
+from app.seed.runbooks import DEFAULT_PRODUCTION_RUNBOOKS
 from app.services.embedding_service import EmbeddingService
 from app.services.qdrant_service import QdrantService
 

@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -27,10 +28,23 @@ class Settings(BaseSettings):
     QDRANT_API_KEY: str | None = None
     QDRANT_COLLECTION: str = "runbooks"
     EMBEDDING_DIMENSION: int = 384
+    EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
+    FASTEMBED_CACHE_DIR: str = "/home/appuser/.cache/fastembed"
 
     # Observability
     PROMETHEUS_URL: str = "http://localhost:9090"
     LOKI_URL: str = "http://localhost:3100"
+
+    # LLM provider for the chat agent: "groq" or "gemini"
+    LLM_PROVIDER: Literal["groq", "gemini", "ollama"] = "groq"
+    GROQ_API_KEY: str | None = None
+    GROQ_MODEL: str = "openai/gpt-oss-120b"
+    GEMINI_API_KEY: str | None = None
+
+    CHAT_REQUESTS_PER_MINUTE: int = 30
+    GEMINI_MODEL: str = "gemini-2.5-flash"
+    OLLAMA_URL: str = "http://localhost:11434"
+    OLLAMA_MODEL: str = "qwen2.5:3b"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

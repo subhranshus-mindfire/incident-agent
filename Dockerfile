@@ -25,7 +25,8 @@ RUN uv pip install --system --no-cache -r requirements.txt
 # Create non-root system user for security
 RUN groupadd -g 10001 appgroup && \
     useradd -u 10001 -g appgroup -s /bin/bash -m appuser && \
-    chown -R appuser:appgroup /workspace
+    mkdir -p /home/appuser/.cache/fastembed && \
+    chown -R appuser:appgroup /workspace /home/appuser/.cache
 
 # Copy source code and tests with non-root ownership
 COPY --chown=appuser:appgroup . /workspace

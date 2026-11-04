@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: postgrespassword
       POSTGRES_DB: incident_db
     ports:
-      - "5434:5432"
+      - "127.0.0.1:5434:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -19,12 +19,23 @@ services:
     networks:
       - incident-network
 
+  ollama:
+    image: ollama/ollama:0.35.1
+    container_name: incident-agent-ollama
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - incident-network
+
   redis:
     image: redis:7-alpine
     container_name: incident-agent-redis
     restart: unless-stopped
     ports:
-      - "6380:6379"
+      - "127.0.0.1:6380:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -40,8 +51,8 @@ services:
     container_name: incident-agent-qdrant
     restart: unless-stopped
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:
@@ -57,7 +68,7 @@ services:
     container_name: incident-agent-prometheus
     restart: unless-stopped
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     volumes:
       - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
@@ -79,7 +90,7 @@ services:
     restart: unless-stopped
     user: "0:0"
     ports:
-      - "3100:3100"
+      - "127.0.0.1:3100:3100"
     volumes:
       - ./observability/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
       - loki_data:/tmp/loki
@@ -93,6 +104,30 @@ services:
     networks:
       - incident-network
 
+  payment-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: incident-agent-payment-api
+    restart: unless-stopped
+    command: ["uvicorn", "simulation.services.payment_api:app", "--host", "0.0.0.0", "--port", "8080"]
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      - LOKI_URL=http://loki:3100
+    depends_on:
+      loki:
+        condition: service_healthy
+    volumes:
+      - ./simulation:/workspace/simulation
+    networks:
+      - incident-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --tries=1 --spider http://localhost:8080/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   app:
     build:
       context: .
@@ -100,12 +135,12 @@ services:
     container_name: incident-agent-app
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       - APP_NAME=Incident Investigation Agent
       - APP_VERSION=0.1.0
       - ENVIRONMENT=development
-      - DEBUG=true
+      - DEBUG=false
       - HOST=0.0.0.0
       - PORT=8000
       - DATABASE_URL=postgresql+asyncpg://postgres:postgrespassword@postgres:5432/incident_db
@@ -113,6 +148,17 @@ services:
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
       - PROMETHEUS_URL=http://prometheus:9090
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-groq}
+      - GROQ_MODEL=${GROQ_MODEL:-openai/gpt-oss-120b}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      - LANGSMITH_TRACING=${LANGSMITH_TRACING:-false}
+      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}
+      - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-incident-agent}
+      - OLLAMA_URL=http://ollama:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
       - LOKI_URL=http://loki:3100
     depends_on:
       postgres:
@@ -127,9 +173,11 @@ services:
         condition: service_healthy
     volumes:
       - ./app:/workspace/app
+      - ./simulation:/workspace/simulation
       - ./tests:/workspace/tests
       - ./migrations:/workspace/migrations
       - ./pyproject.toml:/workspace/pyproject.toml
+      - fastembed_cache:/home/appuser/.cache/fastembed
     networks:
       - incident-network
 
@@ -145,9 +193,34 @@ services:
       - PYTHONPATH=/workspace
     volumes:
       - ./app:/workspace/app
+      - ./simulation:/workspace/simulation
+      - ./ui:/workspace/ui
       - ./tests:/workspace/tests
       - ./pyproject.toml:/workspace/pyproject.toml
     command: ["pytest", "-v", "tests/"]
+    networks:
+      - incident-network
+
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: incident-agent-ui
+    restart: unless-stopped
+    command: ["streamlit", "run", "ui/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+    ports:
+      - "127.0.0.1:8501:8501"
+    environment:
+      - AGENT_API_URL=http://app:8000
+      - PROMETHEUS_URL=http://prometheus:9090
+      - LOKI_URL=http://loki:3100
+      - PAYMENT_API_URL=http://payment-api:8080
+    depends_on:
+      app:
+        condition: service_healthy
+    volumes:
+      - ./ui:/workspace/ui
+      - ./simulation:/workspace/simulation
     networks:
       - incident-network
 
@@ -157,6 +230,8 @@ volumes:
   qdrant_data:
   prometheus_data:
   loki_data:
+  ollama_data:
+  fastembed_cache:
 
 networks:
   incident-network:

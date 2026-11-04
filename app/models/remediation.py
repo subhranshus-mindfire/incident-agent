@@ -1,4 +1,3 @@
-import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -8,13 +7,14 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.config.database import Base
 from app.constants.enums import RemediationStatus
+from app.utils.ids import new_id
 
 if TYPE_CHECKING:
     from app.models.investigation import Investigation
 
 
 def generate_uuid() -> str:
-    return f"rem-{uuid.uuid4().hex[:12]}"
+    return new_id("rem")
 
 
 class RemediationAction(Base):

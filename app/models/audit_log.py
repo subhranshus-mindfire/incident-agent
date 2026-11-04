@@ -1,4 +1,3 @@
-import uuid
 from datetime import datetime
 from typing import Any
 
@@ -8,10 +7,11 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.config.database import Base
 from app.constants.enums import AuditAction
+from app.utils.ids import new_id
 
 
 def generate_uuid() -> str:
-    return f"aud-{uuid.uuid4().hex[:12]}"
+    return new_id("aud")
 
 
 class AuditLog(Base):

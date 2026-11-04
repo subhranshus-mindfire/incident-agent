@@ -1,6 +1,5 @@
 import logging
 from datetime import UTC, datetime
-from functools import lru_cache
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, status
@@ -12,6 +11,7 @@ from app.schemas.telemetry import (
     LogQueryResult,
     MetricQueryResult,
 )
+from app.services.clients import get_loki_service, get_prometheus_service
 from app.services.loki_service import LokiService
 from app.services.prometheus_service import PrometheusService
 
@@ -26,18 +26,6 @@ SERVICE_QUERY_PARAM = Query(
     description="Target service identifier (alphanumeric, dash, dot, underscore only)",
     examples=["checkout-service"],
 )
-
-
-@lru_cache
-def get_prometheus_service() -> PrometheusService:
-    """Returns singleton PrometheusService utilizing shared HTTP connection pool."""
-    return PrometheusService()
-
-
-@lru_cache
-def get_loki_service() -> LokiService:
-    """Returns singleton LokiService utilizing shared HTTP connection pool."""
-    return LokiService()
 
 
 @router.get("/metrics/query", response_model=MetricQueryResult, status_code=status.HTTP_200_OK)
@@ -57,10 +45,18 @@ async def query_prometheus_metrics(
 async def get_service_golden_signals(
     service: str = SERVICE_QUERY_PARAM,
     window_minutes: int = Query(15, ge=1, le=120, description="Evaluation window in minutes"),
+    window_seconds: int | None = Query(
+        None,
+        ge=10,
+        le=7200,
+        description="Short live window in seconds (overrides window_minutes; min 10)",
+    ),
     prom_service: PrometheusService = Depends(get_prometheus_service),
 ) -> GoldenSignalMetrics:
     """Computes Google SRE Golden Signals (Error rate, Throughput, Latency, Saturation) for a service."""
-    return await prom_service.get_golden_signals(service=service, window_minutes=window_minutes)
+    return await prom_service.get_golden_signals(
+        service=service, window_minutes=window_minutes, window_seconds=window_seconds
+    )
 
 
 @router.get(
@@ -81,13 +77,17 @@ async def detect_service_anomalies(
 async def query_loki_logs(
     query: str = Query(..., description="LogQL query expression"),
     window_minutes: int = Query(15, ge=1, le=120, description="Time window in minutes"),
+    window_seconds: int | None = Query(
+        None, ge=1, le=7200, description="Short live window in seconds (overrides window_minutes)"
+    ),
     limit: int = Query(100, ge=1, le=500, description="Maximum raw lines to scan"),
     deduplicate: bool = Query(True, description="Cluster and deduplicate recurring error lines"),
     loki_service: LokiService = Depends(get_loki_service),
 ) -> LogQueryResult:
     """Queries Grafana Loki logs with automatic secret redaction and log deduplication."""
     end = datetime.now(UTC)
-    start = datetime.fromtimestamp(end.timestamp() - (window_minutes * 60), tz=UTC)
+    span_seconds = window_seconds or window_minutes * 60
+    start = datetime.fromtimestamp(end.timestamp() - span_seconds, tz=UTC)
     return await loki_service.query_range(
         logql=query,
         start=start,

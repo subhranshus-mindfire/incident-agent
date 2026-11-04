@@ -1,4 +1,3 @@
-import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -8,6 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.config.database import Base
 from app.constants.enums import InvestigationStatus
+from app.utils.ids import new_id
 
 if TYPE_CHECKING:
     from app.models.evidence import Evidence
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 
 def generate_uuid() -> str:
-    return f"inv-{uuid.uuid4().hex[:12]}"
+    return new_id("inv")
 
 
 class Investigation(Base):
