@@ -158,9 +158,10 @@ def create_investigation_graph(
 
     # 2. Register Edges
     workflow.add_edge(START, "ingest_alert")
+    # Telemetry and Qdrant retrieval run in parallel; correlation waits for both.
     workflow.add_edge("ingest_alert", "gather_telemetry")
-    workflow.add_edge("gather_telemetry", "retrieve_qdrant")
-    workflow.add_edge("retrieve_qdrant", "correlate_evidence")
+    workflow.add_edge("ingest_alert", "retrieve_qdrant")
+    workflow.add_edge(["gather_telemetry", "retrieve_qdrant"], "correlate_evidence")
 
     # Conditional Branching: Evidence Sufficiency Check
     workflow.add_conditional_edges(

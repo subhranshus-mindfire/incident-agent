@@ -99,9 +99,8 @@ async def node_retrieve_qdrant(state: InvestigationState) -> dict[str, Any]:
     symptoms = state["symptoms"]
     qdrant = get_shared_qdrant_service()
 
+    # Searches on the symptoms only, so this step can run in parallel with telemetry gathering.
     query = symptoms
-    if state.get("log_findings"):
-        query += f" {state['log_findings'][0].sample_line}"
 
     # 1. Search past incidents in Qdrant
     past_incidents = await search_past_incidents(query=query, service=service, limit=3)
@@ -389,6 +388,22 @@ async def node_execute_remediation(state: InvestigationState) -> dict[str, Any]:
         return {
             "status": IncidentStatus.INVESTIGATING,
             "audit_events": [f"Remediation not executed (Approval: {approval_status})"],
+        }
+
+    # Duplicate protection: executed_actions is part of the durable checkpoint, so a retry or a
+    # restart sees a successful execution made earlier and does not run the action again.
+    earlier = [
+        r
+        for r in state.get("executed_actions", [])
+        if r.success and r.action_type == proposal.action_type.value
+    ]
+    if earlier:
+        logger.info("[Node 8: ExecuteRemediation] Already executed; skipping duplicate execution")
+        return {
+            "execution_result": earlier[-1],
+            "audit_events": [
+                f"Duplicate skipped: {proposal.action_type.value} was already executed"
+            ],
         }
 
     # Execute remediation via tool
