@@ -19,6 +19,8 @@ def _urllib_call(
     method: str, url: str, data: dict[str, Any] | None = None, timeout: float = 5.0
 ) -> tuple[int, Any]:
     """Fallback HTTP caller using Python standard library (no dependencies required)."""
+    if not url.startswith(("http://", "https://")):
+        raise ValueError(f"Refusing non-HTTP URL: {url}")
     req = urllib.request.Request(url, method=method)
     body = None
     if data is not None:

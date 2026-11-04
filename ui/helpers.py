@@ -7,11 +7,18 @@ from typing import Any
 logger = logging.getLogger("incident_agent.ui.helpers")
 
 
+def _require_http_url(url: str) -> str:
+    """Only http and https URLs are allowed, so a configured value cannot open local files or other schemes."""
+    if not url.startswith(("http://", "https://")):
+        raise ValueError(f"Refusing non-HTTP URL: {url}")
+    return url
+
+
 def api_request(
     method: str, url: str, data: dict[str, Any] | None = None, timeout: float = 8.0
 ) -> tuple[int, Any]:
     """Universal HTTP requester with robust JSON and error handling."""
-    req = urllib.request.Request(url, method=method)
+    req = urllib.request.Request(_require_http_url(url), method=method)
     req.add_header("User-Agent", "IncidentAgent-StreamlitUI/1.0")
     body = None
     if data is not None:
@@ -40,7 +47,7 @@ def api_request(
 def ping_endpoint(url: str, timeout: float = 2.0) -> bool:
     """Checks if a target URL responds with 2xx/3xx."""
     try:
-        req = urllib.request.Request(url, method="GET")
+        req = urllib.request.Request(_require_http_url(url), method="GET")
         with urllib.request.urlopen(req, timeout=timeout) as response:
             return response.getcode() in (200, 204, 301, 302)
     except Exception:

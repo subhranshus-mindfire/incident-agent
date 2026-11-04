@@ -24,6 +24,13 @@ logger = logging.getLogger("incident_agent.loki_service")
 # Strict identifier validation for LogQL label injection defense
 
 
+def service_selector(service: str) -> str:
+    """A LogQL stream selector for one service. The name is validated first, so it cannot change the query."""
+    if not SERVICE_IDENTIFIER_PATTERN.match(service.strip()):
+        raise ValueError(f"Invalid service identifier '{service}'.")
+    return f'{{service="{service.strip()}"}}'
+
+
 class LokiService:
     """Production client for querying Grafana Loki with log deduplication, redaction, and token budgeting."""
 
@@ -123,7 +130,8 @@ class LokiService:
                 r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[^\s]*", "TIMESTAMP", signature
             )
             signature = re.sub(r"\b\d+\b", "NUM", signature)
-            fingerprint = hashlib.md5(signature.encode("utf-8")).hexdigest()
+            # Grouping key only, not a security measure.
+            fingerprint = hashlib.md5(signature.encode("utf-8"), usedforsecurity=False).hexdigest()
 
             if fingerprint in clustered:
                 clustered[fingerprint].dedup_count += 1

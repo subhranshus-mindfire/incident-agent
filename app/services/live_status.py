@@ -37,6 +37,7 @@ from app.constants.thresholds import (
 )
 from app.schemas.telemetry import GoldenSignalMetrics, LogEntry
 from app.services.clients import get_loki_service, get_prometheus_service
+from app.services.loki_service import service_selector
 from app.utils.formatting import status_label
 from app.utils.time import window_label
 
@@ -200,7 +201,7 @@ async def answer_live(request: LiveRequest, service: str) -> str:
         now = datetime.now(UTC)
         try:
             result = await get_loki_service().query_range(
-                logql=f'{{service="{service}"}}',
+                logql=service_selector(service),
                 start=now - timedelta(seconds=request.window_seconds),
                 end=now,
                 limit=200,

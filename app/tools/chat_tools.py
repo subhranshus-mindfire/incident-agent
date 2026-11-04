@@ -22,6 +22,7 @@ from app.constants.service_dependencies import SERVICE_DEPENDENCIES
 from app.constants.services import PRIMARY_SERVICE
 from app.services.clients import get_loki_service, get_prometheus_service
 from app.services.investigation_service import InvestigationService, summarize_trigger
+from app.services.loki_service import service_selector
 from app.services.qdrant_service import get_shared_qdrant_service
 from app.tools.investigation_tools import get_recent_deployments, search_past_incidents
 from app.utils.errors import error_payload
@@ -74,7 +75,7 @@ async def get_live_logs(
     now = datetime.now(UTC)
     try:
         result = await get_loki_service().query_range(
-            logql=f'{{service="{service}"}}',
+            logql=service_selector(service),
             start=now - timedelta(seconds=window),
             end=now,
             limit=max(1, min(limit, 200)),

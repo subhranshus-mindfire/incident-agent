@@ -1,5 +1,6 @@
 import httpx
 import pytest
+import pytest_asyncio
 
 from app.agents import nodes
 from app.constants.enums import IncidentSeverity, IncidentStatus
@@ -29,8 +30,9 @@ def executor() -> RemediationExecutor:
     return RemediationExecutor()
 
 
-@pytest.fixture
-def investigation_service() -> InvestigationService:
+@pytest_asyncio.fixture
+async def investigation_service() -> InvestigationService:
+    # Async, so the LangGraph checkpointer is created inside the running event loop.
     return InvestigationService()
 
 
