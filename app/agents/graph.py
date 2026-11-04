@@ -92,8 +92,11 @@ def route_evidence_sufficiency(
 
 def route_after_blast_radius(
     state: InvestigationState,
-) -> Literal["execute_remediation", "await_approval"]:
+) -> Literal["execute_remediation", "await_approval", "generate_postmortem"]:
     """Routes execution based on risk tier and human approval requirement."""
+    if state.get("remediation_proposal") is None:
+        logger.info("[Router: BlastRadius] No remediation proposed -> Skipping to postmortem.")
+        return "generate_postmortem"
     status = state.get("approval_status")
     if status == ApprovalStatus.AUTO_APPROVED:
         logger.info("[Router: BlastRadius] Low risk action -> Auto-approved for direct execution.")
@@ -181,6 +184,7 @@ def create_investigation_graph(
         {
             "execute_remediation": "execute_remediation",
             "await_approval": "await_approval",
+            "generate_postmortem": "generate_postmortem",
         },
     )
 
