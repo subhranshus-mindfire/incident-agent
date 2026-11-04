@@ -222,7 +222,8 @@ class PrometheusService:
         )
         rate_query = f'sum(rate(http_requests_total{{service="{safe_service}"}}[{window}]))'
         lat_query = f'histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{{service="{safe_service}"}}[{window}])) by (le)) * 1000'
-        cpu_query = f'avg(rate(container_cpu_usage_seconds_total{{container="{safe_service}",container!=""}}[{window}])) * 100'
+        # Process CPU from the service's own /metrics endpoint (job label = service name).
+        cpu_query = f'sum(rate(process_cpu_seconds_total{{job="{safe_service}"}}[{window}])) * 100'
         mem_query = (
             f'sum(container_memory_working_set_bytes{{container="{safe_service}"}}) '
             f'/ (sum(container_spec_memory_limit_bytes{{container="{safe_service}"}}) + 1) * 100'

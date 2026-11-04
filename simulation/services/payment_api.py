@@ -1,5 +1,6 @@
 import logging
 import os
+import threading
 import time
 from typing import Any
 
@@ -14,6 +15,20 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("simulation.payment_api")
 
 app = FastAPI(title="Payment API (Simulation Microservice)", version="2.3.1")
+
+
+def _burn_cpu_while_active() -> None:
+    """Keeps roughly 80% of one core busy while the CPU-burn fault is active, so CPU metrics move."""
+    while True:
+        if chaos_state.cpu_burn_active:
+            busy_until = time.perf_counter() + 0.04
+            while time.perf_counter() < busy_until:
+                pass
+            time.sleep(0.01)
+        else:
+            time.sleep(0.1)
+
+
 
 # Prometheus Metrics
 HTTP_REQUESTS_TOTAL = Counter(
@@ -54,6 +69,8 @@ class ChaosState:
 
 
 chaos_state = ChaosState()
+
+threading.Thread(target=_burn_cpu_while_active, name="cpu-burn", daemon=True).start()
 
 
 async def push_log_to_loki(level: str, message: str) -> None:
