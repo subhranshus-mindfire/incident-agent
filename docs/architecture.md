@@ -6,13 +6,17 @@ This document provides the formal architecture specification for the **Autonomou
 
 ## 1. LangGraph State Machine Architecture
 
+Telemetry gathering and Qdrant retrieval run in parallel after alert ingestion, and evidence correlation waits for both. A remediation is executed at most once: a successful earlier execution in the checkpointed `executed_actions` list is reused on retry or restart. Severity is classified from the symptoms when the caller does not state one.
+
 The agent executes as a stateful, compiled LangGraph graph persisted via PostgreSQL checkpoints.
 
 ```mermaid
 flowchart TD
     START([Incident Ingested]) --> IngestAlert[node_ingest_alert]
     IngestAlert --> GatherTelemetry[node_gather_telemetry]
+    IngestAlert --> RetrieveQdrant[node_retrieve_qdrant]
     GatherTelemetry --> CorrelateEvidence[node_correlate_evidence]
+    RetrieveQdrant --> CorrelateEvidence
     
     CorrelateEvidence --> RouteSufficiency{Evidence Sufficient?}
     RouteSufficiency -- "No (insufficient)" --> ExpandDiagnostics[node_expand_diagnostics]

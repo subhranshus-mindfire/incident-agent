@@ -93,6 +93,19 @@ The agent will execute the live remediation on `payment-api`, verify recovery, i
 
 ---
 
+## 🔐 Sign-in, Models and Data
+
+**Accounts.** The console and the API need a signed-in user. Create an account with
+`make create-user NAME=<username>` and type the password at the prompt. Every investigation records who opened it, and every approval, rejection or diagnostics request records who made it. The approval card shows *Created by*, and the outcome shows *Approved by*.
+
+**Chat models.** The chat agent's model is chosen with `LLM_PROVIDER`: `ollama` (local, default in `.env.example`), `groq` or `gemini`. Each uses its own model setting (`OLLAMA_MODEL`, `GROQ_MODEL`, `GEMINI_MODEL`) and key where needed.
+
+**Search embeddings.** Runbooks and incidents are embedded with `BAAI/bge-small-en-v1.5` (384 dimensions) through fastembed. After changing `EMBEDDING_MODEL`, run `make reindex`.
+
+**Sample data.** `data/samples/` holds the synthetic records: historical incidents (indexed into Qdrant on start), application logs, deployments, system metrics (CSV) and service dependencies.
+
+**Parallel diagnostics.** Telemetry gathering and Qdrant retrieval run at the same time, and the investigation waits for both before correlating evidence.
+
 ## 🧪 Running Automated Tests
 
 Run the full automated test suite (50 tests covering state machine, HITL approval, Qdrant vector search, Prometheus/Loki telemetry, simulation, and UI):
