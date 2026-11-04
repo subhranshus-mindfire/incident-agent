@@ -229,8 +229,11 @@ async def node_formulate_rca(state: InvestigationState) -> dict[str, Any]:
         )
     )
     has_error_logs = bool(logs)
+    # The service's own health probe names a live fault even when no traffic reaches the metrics.
+    live_faults = await get_active_faults(state["service"]) or {}
+    live_fault = next((f for f, on in live_faults.items() if on and f in FAULT_REMEDIATIONS), None)
 
-    if not has_metric_anomaly and not has_error_logs:
+    if not has_metric_anomaly and not has_error_logs and live_fault is None:
         logger.info(
             "[Node 5: FormulateRCA] No metric anomaly and no error logs detected — "
             "service is healthy. Skipping RCA to prevent hallucinated hypotheses."
@@ -276,6 +279,19 @@ async def node_formulate_rca(state: InvestigationState) -> dict[str, Any]:
                     recommended_action=RemediationActionType.ROLLBACK_DEPLOYMENT,
                 ),
             )
+
+    # A live fault reported by the service is direct evidence, so it leads the ranking.
+    if live_fault is not None:
+        hypotheses.insert(
+            0,
+            RCAHypothesis(
+                title=f"Live fault reported by {state['service']}: {live_fault}",
+                root_cause=f"{state['service']} reports the '{live_fault}' fault as active in its health check.",
+                confidence_score=0.9,
+                evidence_citations=[f"{state['service']} /health: active_chaos.{live_fault}=true"],
+                recommended_action=FAULT_REMEDIATIONS[live_fault],
+            ),
+        )
 
     top_hypothesis = hypotheses[0] if hypotheses else None
     logger.info(
