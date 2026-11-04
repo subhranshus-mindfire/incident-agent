@@ -61,7 +61,7 @@ def test_api_request_http_error_handled():
         assert data["detail"] == "Incident not found"
 
 
-def test_agent_key_is_sent_only_to_the_agent_api(monkeypatch) -> None:
+def test_headers_are_sent_only_when_given() -> None:
     captured = []
 
     class Response:
@@ -81,10 +81,8 @@ def test_agent_key_is_sent_only_to_the_agent_api(monkeypatch) -> None:
         captured.append(req)
         return Response()
 
-    monkeypatch.setenv("AGENT_API_KEY", "secret-for-agent")
-    monkeypatch.setenv("AGENT_API_URL", "http://agent:8000")
     with patch("urllib.request.urlopen", side_effect=fake_urlopen):
-        api_request("GET", "http://agent:8000/api/v1/chat")
+        api_request("GET", "http://agent:8000/api/v1/chat", headers={"Authorization": "Bearer abc"})
         api_request("GET", "https://example.com/other")
-    assert captured[0].get_header("X-api-key") == "secret-for-agent"
-    assert captured[1].get_header("X-api-key") is None
+    assert captured[0].get_header("Authorization") == "Bearer abc"
+    assert captured[1].get_header("Authorization") is None

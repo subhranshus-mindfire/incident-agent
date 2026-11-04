@@ -1,5 +1,4 @@
 import json
-import os
 import logging
 import urllib.error
 import urllib.request
@@ -16,14 +15,17 @@ def _require_http_url(url: str) -> str:
 
 
 def api_request(
-    method: str, url: str, data: dict[str, Any] | None = None, timeout: float = 8.0
+    method: str,
+    url: str,
+    data: dict[str, Any] | None = None,
+    timeout: float = 8.0,
+    headers: dict[str, str] | None = None,
 ) -> tuple[int, Any]:
     """Universal HTTP requester with robust JSON and error handling."""
     req = urllib.request.Request(_require_http_url(url), method=method)
     req.add_header("User-Agent", "IncidentAgent-StreamlitUI/1.0")
-    agent_key = os.getenv("AGENT_API_KEY")
-    if agent_key and url.startswith(os.getenv("AGENT_API_URL", "http://localhost:8000").rstrip("/")):
-        req.add_header("X-API-Key", agent_key)
+    for name, value in (headers or {}).items():
+        req.add_header(name, value)
     body = None
     if data is not None:
         body = json.dumps(data).encode("utf-8")

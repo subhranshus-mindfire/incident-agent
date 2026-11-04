@@ -1,4 +1,4 @@
-.PHONY: help setup install-hooks lint format typecheck audit test up down logs chaos-deadlock chaos-bad-deploy chaos-cpu-burn chaos-traffic chaos-rollback chaos-clear chaos-health reindex ui clean
+.PHONY: help setup install-hooks lint format typecheck audit test up down logs chaos-deadlock chaos-bad-deploy chaos-cpu-burn chaos-traffic chaos-rollback chaos-clear chaos-health reindex create-user ui clean
 
 help:
 	@echo "Incident Investigation Agent - Developer Commands"
@@ -13,6 +13,7 @@ help:
 	@echo "  make down           Stop all Docker Compose services"
 	@echo "  make logs           View application container logs"
 	@echo "  make reindex        Re-embed runbooks and incidents after changing EMBEDDING_MODEL"
+	@echo "  make create-user NAME=<user>  Create a user who can sign in"
 	@echo "  make chaos-deadlock     Inject a DB deadlock fault into payment-api"
 	@echo "  make chaos-bad-deploy   Inject a bad-deployment regression (DEP-101)"
 	@echo "  make chaos-cpu-burn     Inject CPU saturation"
@@ -76,6 +77,10 @@ chaos-health:
 
 reindex:
 	docker compose exec app python -m app.services.reindex
+
+# Usage: make create-user NAME=alice  (the password is typed at a prompt, not stored)
+create-user:
+	docker compose exec -it app python -m app.auth.manage create-user $(NAME)
 
 ui:
 	docker compose up -d ui

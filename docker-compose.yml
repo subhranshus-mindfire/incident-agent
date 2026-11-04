@@ -150,7 +150,6 @@ services:
       - PROMETHEUS_URL=http://prometheus:9090
       - GROQ_API_KEY=${GROQ_API_KEY:-}
       - LLM_PROVIDER=${LLM_PROVIDER:-groq}
-      - API_KEY=${AGENT_API_KEY:-}
       - GROQ_MODEL=${GROQ_MODEL:-openai/gpt-oss-120b}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
@@ -209,7 +208,6 @@ services:
     ports:
       - "127.0.0.1:8501:8501"
     environment:
-      - AGENT_API_KEY=${AGENT_API_KEY:-}
       - AGENT_API_URL=http://app:8000
       - PROMETHEUS_URL=http://prometheus:9090
       - LOKI_URL=http://loki:3100

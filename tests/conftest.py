@@ -8,14 +8,13 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from app.config.config import settings as app_settings
+from app.auth.passwords import hash_password
+from app.auth.sessions import create_session
 from app.config.database import Base, get_db_session
 from app.main import app
+from app.models.user import User
 from app.services import clients
 from app.utils.http_client import close_shared_http_client
-
-TEST_API_KEY = "test-api-key"
-app_settings.API_KEY = TEST_API_KEY
 
 # Isolated in-memory async SQLite engine for lightning-fast testing
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -57,9 +56,16 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
 
     app.dependency_overrides[get_db_session] = override_get_db_session
 
+    # A signed-in test user, so authenticated routes and actor attribution run as they do in production.
+    db_session.add(User(username="test-user", password_hash=hash_password("test-password-123")))
+    await db_session.commit()
+    token = await create_session(db_session, "test-user")
+
     transport = ASGITransport(app=app)
     async with AsyncClient(
-        transport=transport, base_url="http://testserver", headers={"X-API-Key": TEST_API_KEY}
+        transport=transport,
+        base_url="http://testserver",
+        headers={"Authorization": f"Bearer {token}"},
     ) as async_client:
         yield async_client
 

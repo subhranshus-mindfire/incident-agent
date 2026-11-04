@@ -168,6 +168,52 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "current_incident" not in st.session_state:
     st.session_state.current_incident = None
+if "token" not in st.session_state:
+    st.session_state.token = None
+    st.session_state.username = None
+    st.session_state.login_error = None
+
+
+def _auth_headers() -> dict[str, str]:
+    return {"Authorization": f"Bearer {st.session_state.token}"}
+
+
+def _session_expired() -> None:
+    """The server rejected the token: forget it so the sign-in form returns."""
+    st.session_state.token = None
+    st.session_state.username = None
+    st.session_state.login_error = "Your session has expired. Sign in again."
+
+
+def _sign_in() -> None:
+    code, resp = api_request(
+        "POST",
+        f"{AGENT_API_URL}/api/v1/auth/login",
+        data={
+            "username": st.session_state.get("login_user", ""),
+            "password": st.session_state.get("login_password", ""),
+        },
+        timeout=15.0,
+    )
+    st.session_state.login_password = ""
+    if code == 200:
+        st.session_state.token = resp["token"]
+        st.session_state.username = resp["username"]
+        st.session_state.login_error = None
+    elif code == 401:
+        st.session_state.login_error = "Invalid username or password."
+    else:
+        st.session_state.login_error = f"Sign-in failed (HTTP {code})."
+
+
+def _sign_out() -> None:
+    api_request(
+        "POST", f"{AGENT_API_URL}/api/v1/auth/logout", timeout=10.0, headers=_auth_headers()
+    )
+    st.session_state.token = None
+    st.session_state.username = None
+    st.session_state.messages = []
+    st.session_state.current_incident = None
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +301,7 @@ def _verification_markdown(report: Any) -> str:
     )
 
 
-def _approval_outcome(action: str, resp: dict[str, Any]) -> str:
+def _approval_outcome(action: str, resp: dict[str, Any], approver: str) -> str:
     state = resp.get("state", {})
     exec_res = state.get("execution_result") or {}
     ok = bool(exec_res.get("success", False))
@@ -268,6 +314,7 @@ def _approval_outcome(action: str, resp: dict[str, Any]) -> str:
         "| Field | Value |\n|-------|-------|\n"
         f"| Action | `{exec_res.get('action_type', action)}` |\n"
         f"| Status | `{'SUCCESS' if ok else 'FAILED'}` |\n"
+        f"| Approved by | {approver} |\n"
         f"| Output | {exec_res.get('message', 'No execution result was returned.')} |\n\n"
         f"{_verification_markdown(state.get('verification_report'))}\n\n"
         "Incident indexed into Qdrant vector memory.\n\n---\n\n"
@@ -284,7 +331,11 @@ def _decide(decision: str, reason: str) -> None:
         "POST",
         f"{AGENT_API_URL}/api/v1/investigations/{inc['id']}/{decision}",
         data={"reason": reason},
+        headers=_auth_headers(),
     )
+    if code == 401:
+        _session_expired()
+        return
     if _is_stale_gate(code, resp):
         st.session_state.current_incident = None
         st.session_state.messages.append(
@@ -298,7 +349,9 @@ def _decide(decision: str, reason: str) -> None:
         st.session_state.notice = ("error", f"{decision.capitalize()} failed: {resp}")
         return
     if decision == "approve":
-        content = _approval_outcome(inc["proposal"].get("action_type", ""), resp)
+        content = _approval_outcome(
+            inc["proposal"].get("action_type", ""), resp, st.session_state.username or "unknown"
+        )
         st.session_state.current_incident = None
     elif decision == "reject":
         content = (
@@ -318,7 +371,9 @@ def _is_stale_gate(code: int, resp: Any) -> bool:
 # ---------------------------------------------------------------------------
 # RENDERING
 # ---------------------------------------------------------------------------
-def _render_approval_card(incident_id: str, proposal: dict[str, Any], pending: bool) -> None:
+def _render_approval_card(
+    incident_id: str, proposal: dict[str, Any], pending: bool, created_by: str = "unknown"
+) -> None:
     def field(key: str, default: str) -> str:
         return (
             str(proposal.get(key, default))
@@ -329,6 +384,7 @@ def _render_approval_card(incident_id: str, proposal: dict[str, Any], pending: b
     st.markdown(
         '<div class="approval-card">'
         '<div class="approval-title">Approval needed before remediation</div>'
+        f'<div class="approval-row"><span>Created by</span><span>{created_by}</span></div>'
         f'<div class="approval-row"><span>Action</span><code>{field("action_type", "ROLLBACK_DEPLOYMENT")}</code></div>'
         f'<div class="approval-row"><span>Risk</span><span>{field("risk_tier", "CRITICAL")}</span></div>'
         f'<div class="approval-row"><span>Rationale</span><span>{field("rationale", "Proposed to resolve detected root cause.")}</span></div>'
@@ -372,7 +428,10 @@ def _render_history() -> None:
     for msg in st.session_state.messages:
         if msg.get("kind") == "approval":
             _render_approval_card(
-                msg["incident_id"], msg["proposal"], pending=msg["incident_id"] == pending_id
+                msg["incident_id"],
+                msg["proposal"],
+                pending=msg["incident_id"] == pending_id,
+                created_by=msg.get("created_by", "unknown"),
             )
         else:
             _render_message(msg["role"], msg["content"])
@@ -398,7 +457,11 @@ def _answer(prompt: str) -> None:
                     "approval_pending": st.session_state.current_incident is not None,
                 },
                 timeout=300.0,
+                headers=_auth_headers(),
             )
+        if code == 401:
+            _session_expired()
+            st.rerun()
         reply = (
             str(resp.get("reply", ""))
             if code == 200
@@ -416,10 +479,33 @@ def _answer(prompt: str) -> None:
                 "kind": "approval",
                 "incident_id": incident["incident_id"],
                 "proposal": proposal,
+                "created_by": incident.get("created_by") or resp.get("created_by") or "unknown",
             }
         )
         st.session_state.current_incident = {"id": incident["incident_id"], "proposal": proposal}
-        _render_approval_card(incident["incident_id"], proposal, pending=True)
+        _render_approval_card(
+            incident["incident_id"],
+            proposal,
+            pending=True,
+            created_by=incident.get("created_by") or resp.get("created_by") or "unknown",
+        )
+
+
+# ---------------------------------------------------------------------------
+# SIGN IN — the console is drawn only for a signed-in user
+# ---------------------------------------------------------------------------
+if not st.session_state.token:
+    st.markdown(
+        '<div class="hero"><div class="hero-mark">✦</div><h2>Sign in to Incident Agent</h2></div>',
+        unsafe_allow_html=True,
+    )
+    with st.form("sign_in", clear_on_submit=False):
+        st.text_input("Username", key="login_user")
+        st.text_input("Password", type="password", key="login_password")
+        st.form_submit_button("Sign in", on_click=_sign_in, use_container_width=True)
+    if st.session_state.login_error:
+        st.error(st.session_state.login_error)
+    st.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -427,6 +513,11 @@ def _answer(prompt: str) -> None:
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.markdown('<div class="brand">✦ Incident Agent</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="svc-pill">Signed in as <b>{st.session_state.username}</b></div>',
+        unsafe_allow_html=True,
+    )
+    st.button("Sign out", key="sign_out", use_container_width=True, on_click=_sign_out)
     st.button("＋  New chat", key="new_chat", use_container_width=True, on_click=_new_chat)
 
     st.markdown('<div class="side-label">Try asking</div>', unsafe_allow_html=True)

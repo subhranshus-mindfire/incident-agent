@@ -1,7 +1,7 @@
+import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Any
 
 from alembic import command
 from alembic.config import Config
@@ -15,21 +15,14 @@ from app.utils.http_client import close_shared_http_client, get_shared_http_clie
 logger = logging.getLogger("incident_agent")
 
 
-def run_upgrade(connection: Any, cfg: Config) -> None:
-    cfg.attributes["connection"] = connection
-    command.upgrade(cfg, "head")
-
-
 async def run_db_migrations() -> None:
     """Applies pending Alembic database migrations programmatically on startup."""
-    from app.config.database import engine
-
     logger.info("Applying database migrations via Alembic...")
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
-    async with engine.begin() as conn:
-        await conn.run_sync(run_upgrade, cfg)
+    # Alembic's async env.py starts its own event loop, so it runs in a worker thread.
+    await asyncio.to_thread(command.upgrade, cfg, "head")
     logger.info("Database schema is fully up to date.")
 
 

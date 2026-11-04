@@ -60,8 +60,9 @@ class InvestigationService:
         service: str,
         symptoms: str,
         severity: IncidentSeverity = IncidentSeverity.HIGH,
+        actor: str = "system",
     ) -> dict[str, Any]:
-        """Initiates an autonomous investigation workflow for an incident."""
+        """Initiates an autonomous investigation workflow for an incident. `actor` is the signed-in user."""
         config = self._get_config(incident_id)
 
         initial_state: InvestigationState = {
@@ -95,7 +96,7 @@ class InvestigationService:
             "execution_result": None,
             "verification_report": None,
             "postmortem": None,
-            "audit_events": ["Triggered investigation"],
+            "audit_events": [f"Investigation opened by {actor}"],
             "error": None,
         }
 
@@ -145,6 +146,7 @@ class InvestigationService:
         approved: bool,
         reason: str = "",
         request_more_diagnostics: bool = False,
+        actor: str = "system",
     ) -> dict[str, Any]:
         """Submits human-in-the-loop decision and resumes paused LangGraph execution."""
         config = self._get_config(incident_id)
@@ -181,7 +183,7 @@ class InvestigationService:
                 "approval_status": new_status,
                 "approval_reason": decision_reason,
                 "audit_events": [
-                    f"Human decision submitted: {new_status.value.upper()} - {decision_reason}"
+                    f"Human decision submitted by {actor}: {new_status.value.upper()} - {decision_reason}"
                 ],
             },
             as_node="await_approval",
@@ -198,6 +200,7 @@ class InvestigationService:
             approved=approved,
             reason=decision_reason,
             state=result,
+            actor=actor,
         )
 
         return {
@@ -329,8 +332,9 @@ class InvestigationService:
         approved: bool,
         reason: str,
         state: dict[str, Any],
+        actor: str = "system",
     ) -> None:
-        """Update DB models upon human decision."""
+        """Update DB models upon human decision, recording who made it."""
         if not self.session or not self.investigation_repo:
             return
 
@@ -344,9 +348,13 @@ class InvestigationService:
                         entity_type="investigation",
                         entity_id=investigation.id,
                         action=AuditAction.APPROVED if approved else AuditAction.REJECTED,
-                        actor="sre",
-                        details={"reason": reason},
+                        actor=actor,
+                        details={"reason": reason, "decided_by": actor},
                     )
+                if approved:
+                    details = await self.investigation_repo.get_with_details(investigation.id)
+                    for action in details.remediations if details else []:
+                        action.approved_by = actor
 
             if self.incident_repo:
                 new_status = IncidentStatus.RESOLVED if approved else IncidentStatus.INVESTIGATING

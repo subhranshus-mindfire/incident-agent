@@ -12,6 +12,7 @@ import httpx
 from langchain_core.tools import tool
 from pydantic import BeforeValidator
 
+from app.auth.context import current_actor
 from app.config.database import async_session_factory
 from app.constants.enums import IncidentSeverity
 from app.constants.live import MAX_WINDOW_SECONDS, MIN_WINDOW_SECONDS
@@ -136,6 +137,7 @@ async def start_investigation(service: ServiceName, symptoms: str) -> dict[str, 
                 service=service,
                 symptoms=symptoms[:500],
                 severity=IncidentSeverity.CRITICAL,
+                actor=current_actor(),
             )
     except Exception as exc:
         return error_payload(exc)
@@ -143,6 +145,7 @@ async def start_investigation(service: ServiceName, symptoms: str) -> dict[str, 
     state = summary["state"]
     return {
         "incident_id": incident_id,
+        "created_by": current_actor(),
         "awaiting_approval": summary["is_awaiting_approval"],
         "root_cause": state["selected_hypothesis"],
         "remediation_proposal": summary["remediation_proposal"],
