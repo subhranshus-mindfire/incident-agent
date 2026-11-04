@@ -19,6 +19,7 @@ from app.schemas.agent_state import (
     InvestigationState,
     RCAHypothesis,
     RemediationActionType,
+    RemediationExecutionResult,
     RiskTier,
 )
 from app.schemas.telemetry import GoldenSignalMetrics
@@ -78,8 +79,10 @@ async def node_gather_telemetry(state: InvestigationState) -> dict[str, Any]:
     time_range = 15 if state.get("retry_count", 0) == 0 else 30
 
     # Fetch logs & metrics using functional tools
-    log_signatures = await fetch_application_logs(service, time_range_minutes=time_range)
-    telemetry_summary = await get_system_metrics(service)
+    log_signatures, telemetry_summary = await asyncio.gather(
+        fetch_application_logs(service, time_range_minutes=time_range),
+        get_system_metrics(service),
+    )
 
     return {
         "metrics": telemetry_summary,
@@ -168,6 +171,9 @@ async def node_correlate_evidence(state: InvestigationState) -> dict[str, Any]:
             f"Historical match ({past.similarity_score:.0%}): {past.root_cause[:90]}"
         )
 
+    # Downstream lines from earlier diagnostics passes are kept apart, so a new pass cannot erase them.
+    evidence_list += state.get("downstream_evidence", [])
+
     return {
         "evidence": evidence_list,
         "audit_events": [
@@ -197,7 +203,7 @@ async def node_expand_diagnostics(state: InvestigationState) -> dict[str, Any]:
     return {
         "retry_count": current_retry,
         "messages": state.get("messages", []) + [msg],
-        "evidence": state.get("evidence", []) + downstream_logs,
+        "downstream_evidence": state.get("downstream_evidence", []) + downstream_logs,
         "audit_events": [
             f"Expanded diagnostics (retry {current_retry}): inspected downstream services."
         ],
@@ -407,12 +413,21 @@ async def node_execute_remediation(state: InvestigationState) -> dict[str, Any]:
         }
 
     # Execute remediation via tool
-    result = await execute_remediation(
-        action=proposal.action_type.value,
-        service=state["service"],
-        approval_id=f"appr-{state['incident_id'][:8]}",
-        parameters=proposal.parameters,
-    )
+    try:
+        result = await execute_remediation(
+            action=proposal.action_type.value,
+            service=state["service"],
+            approval_id=f"appr-{state['incident_id'][:8]}",
+            parameters=proposal.parameters,
+        )
+    except Exception as exc:
+        # Recorded as a failed execution, so verification and the audit trail still run.
+        logger.error(f"[Node 8: ExecuteRemediation] Tool call failed: {exc}")
+        result = RemediationExecutionResult(
+            success=False,
+            action_type=proposal.action_type.value,
+            message=f"Execution failed: {exc}",
+        )
 
     executed_list = state.get("executed_actions", []) + [result]
     new_status = IncidentStatus.RESOLVED if result.success else IncidentStatus.INVESTIGATING

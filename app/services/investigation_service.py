@@ -86,6 +86,7 @@ class InvestigationService:
             "retrieved_incidents": [],
             "hypotheses": [],
             "evidence": [],
+            "downstream_evidence": [],
             "pending_action": None,
             "approval_status": ApprovalStatus.PENDING,
             "approval_reason": None,

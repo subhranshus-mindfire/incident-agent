@@ -176,6 +176,7 @@ class InvestigationState(TypedDict):
     retrieved_incidents: list[HistoricalIncident]
     hypotheses: list[RCAHypothesis]
     evidence: list[str]
+    downstream_evidence: list[str]
     pending_action: RemediationProposal | None
     approval_status: ApprovalStatus
     approval_reason: str | None

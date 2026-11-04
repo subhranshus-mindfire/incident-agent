@@ -2,9 +2,7 @@ import logging
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
 
-from app.bootstrap import lifespan
 from app.config import settings
 from app.exceptions import (
     AppException,
@@ -12,6 +10,8 @@ from app.exceptions import (
     generic_exception_handler,
     validation_exception_handler,
 )
+from app.middleware.bootstrap import lifespan
+from app.middleware.cors import add_cors
 from app.routes import api_router
 from app.routes.health import router as health_router
 
@@ -31,14 +31,7 @@ def create_application() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS configuration
-    application.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.ALLOWED_ORIGINS,
-        allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    add_cors(application)
 
     # Exception Handlers (RFC 7807)
     application.add_exception_handler(AppException, app_exception_handler)
