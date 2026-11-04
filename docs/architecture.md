@@ -12,35 +12,32 @@ The agent executes as a stateful, compiled LangGraph graph persisted via Postgre
 
 ```mermaid
 flowchart TD
-    START([Incident Ingested]) --> IngestAlert[node_ingest_alert]
-    IngestAlert --> GatherTelemetry[node_gather_telemetry]
-    IngestAlert --> RetrieveQdrant[node_retrieve_qdrant]
-    GatherTelemetry --> CorrelateEvidence[node_correlate_evidence]
-    RetrieveQdrant --> CorrelateEvidence
-    
-    CorrelateEvidence --> RouteSufficiency{Evidence Sufficient?}
-    RouteSufficiency -- "No (insufficient)" --> ExpandDiagnostics[node_expand_diagnostics]
-    ExpandDiagnostics --> CorrelateEvidence
-    RouteSufficiency -- "Yes (sufficient)" --> FormulateRCA[node_formulate_rca]
-    
-    FormulateRCA --> AssessBlastRadius[node_assess_blast_radius]
-    AssessBlastRadius --> ProposeRemediation[node_propose_remediation]
-    
-    ProposeRemediation --> ApprovalGate[node_approval_gate<br/><b>INTERRUPT (HITL)</b>]
-    
-    ApprovalGate --> RouteApproval{Human Decision}
-    RouteApproval -- "APPROVED" --> ExecuteRemediation[node_execute_remediation]
-    RouteApproval -- "REJECTED" --> AbortRemediation[node_abort_remediation]
-    RouteApproval -- "DIAGNOSTICS_REQUESTED" --> ExpandDiagnostics
-    
-    ExecuteRemediation --> VerifyHealth[node_verify_health]
-    VerifyHealth --> RouteVerification{Health Verified?}
-    RouteVerification -- "Degraded (Retry)" --> ExecuteRemediation
-    RouteVerification -- "Healthy" --> GeneratePostmortem[node_generate_postmortem]
-    
-    AbortRemediation --> GeneratePostmortem
-    GeneratePostmortem --> PersistMemory[persist_resolved_incident<br/>to Qdrant]
-    PersistMemory --> END([Investigation Concluded])
+    START([Incident ingested]) --> Ingest["node_ingest_alert"]
+    Ingest --> Telemetry["node_gather_telemetry (parallel)"]
+    Ingest --> Retrieve["node_retrieve_qdrant (parallel)"]
+    Telemetry --> Correlate["node_correlate_evidence"]
+    Retrieve --> Correlate
+
+    Correlate --> Sufficient{"Evidence sufficient?"}
+    Sufficient -- "no" --> Diagnostics["node_expand_diagnostics"]
+    Diagnostics --> Correlate
+    Sufficient -- "yes" --> RCA["node_formulate_rca"]
+
+    RCA --> Blast["node_assess_blast_radius"]
+    Blast --> AfterBlast{"Route after blast radius"}
+    AfterBlast -- "low risk, auto-approved" --> Execute["node_execute_remediation"]
+    AfterBlast -- "needs approval" --> Approval["node_await_approval (INTERRUPT)"]
+    AfterBlast -- "no proposal" --> Postmortem["node_generate_postmortem"]
+
+    Approval --> Decision{"Route after human decision"}
+    Decision -- "approved" --> Execute
+    Decision -- "diagnostics requested" --> Diagnostics
+    Decision -- "rejected" --> Postmortem
+
+    Execute --> Verify["node_verify_health"]
+    Verify --> Persist["node_persist_incident_memory"]
+    Persist --> Postmortem
+    Postmortem --> END([Investigation concluded])
 ```
 
 ---
