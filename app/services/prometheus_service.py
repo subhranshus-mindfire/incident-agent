@@ -188,19 +188,19 @@ class PrometheusService:
         data = await self._execute_with_retry("/api/v1/query_range", params)
         return self._parse_metric_result(promql, data)
 
-    async def _query_single_value(self, promql: str, default: float = 0.0) -> float:
-        """Helper to extract a single scalar/vector value safely."""
+    async def _query_single_value(self, promql: str) -> float | None:
+        """A single value from a PromQL query, or None when there is no data or the query failed."""
         try:
             res = await self.query(promql)
             if res.series and res.series[0].points:
                 val = res.series[0].points[0].value
-                # Filter out NaN / Inf
-                if val != val or val == float("inf") or val == float("-inf"):
-                    return default
+                # NaN and infinity are not measurements
+                if val != val or val in (float("inf"), float("-inf")):
+                    return None
                 return val
         except Exception as ex:
             logger.debug("Metric query failed or returned no data (%s): %s", promql, ex)
-        return default
+        return None
 
     async def get_golden_signals(
         self,
@@ -229,13 +229,22 @@ class PrometheusService:
             f'/ (sum(container_spec_memory_limit_bytes{{container="{safe_service}"}}) + 1) * 100'
         )
 
-        error_rate, req_rate, p95_lat, cpu_pct, mem_pct = await asyncio.gather(
-            self._query_single_value(err_query, default=0.0),
-            self._query_single_value(rate_query, default=0.0),
-            self._query_single_value(lat_query, default=0.0),
-            self._query_single_value(cpu_query, default=0.0),
-            self._query_single_value(mem_query, default=0.0),
+        names = [
+            "error_rate_5xx_percent",
+            "request_rate_per_sec",
+            "p95_latency_ms",
+            "cpu_usage_percent",
+            "memory_usage_percent",
+        ]
+        results = await asyncio.gather(
+            self._query_single_value(err_query),
+            self._query_single_value(rate_query),
+            self._query_single_value(lat_query),
+            self._query_single_value(cpu_query),
+            self._query_single_value(mem_query),
         )
+        missing = [name for name, value in zip(names, results, strict=True) if value is None]
+        error_rate, req_rate, p95_lat, cpu_pct, mem_pct = (0.0 if v is None else v for v in results)
 
         return GoldenSignalMetrics(
             service=safe_service,
@@ -244,6 +253,7 @@ class PrometheusService:
             p95_latency_ms=round(max(0.0, p95_lat), 2),
             cpu_usage_percent=round(max(0.0, min(100.0, cpu_pct)), 2),
             memory_usage_percent=round(max(0.0, min(100.0, mem_pct)), 2),
+            missing_signals=missing,
             collected_at=datetime.now(UTC),
         )
 

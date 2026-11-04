@@ -451,13 +451,20 @@ async def node_verify_health(state: InvestigationState) -> dict[str, Any]:
             )
         else:
             # With no requests in the window, the error rate is 0 by arithmetic, not by observation.
-            has_traffic = current.request_rate_per_sec > 0
+            not_collected = set(current.missing_signals) & {
+                "error_rate_5xx_percent",
+                "p95_latency_ms",
+                "request_rate_per_sec",
+            }
+            has_traffic = current.request_rate_per_sec > 0 and not not_collected
             within_thresholds = (
                 current.error_rate_5xx_percent < ERROR_RATE_FAULT_PCT
                 and current.p95_latency_ms < LATENCY_FAULT_MS
             )
             stabilized = has_traffic and within_thresholds
-            if not has_traffic:
+            if not_collected:
+                outcome = f"Metrics not collected ({', '.join(sorted(not_collected))}), so health cannot be verified."
+            elif not has_traffic:
                 outcome = (
                     "No requests observed in the last minute, so health cannot be verified. "
                     "Send traffic to the service and verify again."

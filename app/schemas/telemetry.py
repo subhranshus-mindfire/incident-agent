@@ -30,6 +30,10 @@ class GoldenSignalMetrics(BaseModel):
     )
     cpu_usage_percent: float = Field(ge=0.0, description="CPU utilization percentage")
     memory_usage_percent: float = Field(ge=0.0, description="Memory utilization percentage")
+    missing_signals: list[str] = Field(
+        default_factory=list,
+        description="Signals with no data in the window. Their values are placeholders, not measurements.",
+    )
     collected_at: datetime
 
 

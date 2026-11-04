@@ -99,27 +99,40 @@ def classify_live_request(text: str) -> LiveRequest | None:
 
 
 def golden_table(signals: GoldenSignalMetrics) -> str:
-    """Golden-signal table. With no requests in the window, error and latency are not measurements."""
-    traffic = signals.request_rate_per_sec > 0
-    error_status = (
-        status_label(
+    """Golden-signal table. Missing data is shown as unknown; with no requests, error and latency are not measurements."""
+    missing = set(signals.missing_signals)
+    traffic = signals.request_rate_per_sec > 0 and "request_rate_per_sec" not in missing
+
+    def cell(value: str, signal: str) -> str:
+        return "n/a" if signal in missing else value
+
+    if "error_rate_5xx_percent" in missing:
+        error_status = "⚪ not collected"
+    elif not traffic:
+        error_status = "⚪ no traffic"
+    else:
+        error_status = status_label(
             signals.error_rate_5xx_percent, ERROR_RATE_FAULT_PCT, ERROR_RATE_CRITICAL_PCT, "%"
         )
-        if traffic
-        else "⚪ no traffic"
-    )
-    latency_status = (
-        status_label(signals.p95_latency_ms, LATENCY_WARN_MS, LATENCY_FAULT_MS, "ms")
-        if traffic
-        else "⚪ no traffic"
+    if "p95_latency_ms" in missing:
+        latency_status = "⚪ not collected"
+    elif not traffic:
+        latency_status = "⚪ no traffic"
+    else:
+        latency_status = status_label(
+            signals.p95_latency_ms, LATENCY_WARN_MS, LATENCY_FAULT_MS, "ms"
+        )
+    cpu_status = (
+        "⚪ not collected"
+        if "cpu_usage_percent" in missing
+        else status_label(signals.cpu_usage_percent, CPU_WARN_PCT, CPU_CRITICAL_PCT, "%")
     )
     return (
         "| Signal | Value | Status |\n"
         "|--------|-------|--------|\n"
-        f"| 5xx error rate | `{signals.error_rate_5xx_percent:.2f}%` | {error_status} |\n"
-        f"| p95 latency | `{signals.p95_latency_ms:.0f}ms` | {latency_status} |\n"
-        f"| CPU usage | `{signals.cpu_usage_percent:.1f}%` | "
-        f"{status_label(signals.cpu_usage_percent, CPU_WARN_PCT, CPU_CRITICAL_PCT, '%')} |"
+        f"| 5xx error rate | `{cell(f'{signals.error_rate_5xx_percent:.2f}%', 'error_rate_5xx_percent')}` | {error_status} |\n"
+        f"| p95 latency | `{cell(f'{signals.p95_latency_ms:.0f}ms', 'p95_latency_ms')}` | {latency_status} |\n"
+        f"| CPU usage | `{cell(f'{signals.cpu_usage_percent:.1f}%', 'cpu_usage_percent')}` | {cpu_status} |"
     )
 
 
@@ -133,6 +146,7 @@ def status_verdict(
 
     `health` is None for services without a health probe.
     """
+    missing = set(signals.missing_signals)
     faults: list[str] = []
     if health is not None:
         if health.http_status != 200:
@@ -144,24 +158,32 @@ def status_verdict(
             faults += [f"active fault: {name}" for name, on in active.items() if on]
 
     rate = signals.request_rate_per_sec
-    if rate > 0:
+    traffic_known = "request_rate_per_sec" not in missing and rate > 0
+    measured = traffic_known and not {"error_rate_5xx_percent", "p95_latency_ms"} & missing
+    if measured:
         if signals.error_rate_5xx_percent >= ERROR_RATE_FAULT_PCT:
             faults.append(f"5xx error rate {signals.error_rate_5xx_percent:.1f}%")
         if signals.p95_latency_ms >= LATENCY_FAULT_MS:
             faults.append(f"p95 latency {signals.p95_latency_ms:.0f}ms")
+    cpu_text = (
+        "CPU n/a" if "cpu_usage_percent" in missing else f"CPU `{signals.cpu_usage_percent:.1f}%`"
+    )
+    if "request_rate_per_sec" in missing:
+        traffic_line = f"Request metrics are not available, so error rate and latency are unverified. {cpu_text}."
+    elif not traffic_known:
+        # Zero traffic makes the error rate 0 by arithmetic, so it proves nothing about health.
+        traffic_line = f"No requests in the last {label}, so error rate and latency are unverified. {cpu_text}."
+    else:
         traffic_line = (
             f"5xx `{signals.error_rate_5xx_percent:.2f}%` · p95 `{signals.p95_latency_ms:.0f}ms` · "
-            f"CPU `{signals.cpu_usage_percent:.1f}%` · last {label}"
+            f"{cpu_text} · last {label}"
         )
-    else:
-        # Zero traffic makes the error rate 0 by arithmetic, so it proves nothing about health.
-        traffic_line = f"No requests in the last {label}, so error rate and latency are unverified."
 
     if faults:
         return f"🔴 **`{service}` is degraded:** {'; '.join(faults)}. {traffic_line}"
-    if health is None and rate <= 0:
+    if health is None and not measured:
         return (
-            f"⚪ **`{service}` status unknown.** No requests in the last {label}, "
+            f"⚪ **`{service}` status unknown.** No measured traffic in the last {label}, "
             "so metrics can't confirm health."
         )
     return f"🟢 **`{service}` is up.** Health endpoint responds; no fault detected. {traffic_line}"

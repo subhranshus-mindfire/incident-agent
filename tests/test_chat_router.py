@@ -213,3 +213,35 @@ async def test_question_while_card_pending_is_not_intercepted() -> None:
 async def test_fix_request_without_pending_card_is_not_intercepted() -> None:
     routed = await route_message("Okay Please have a fix", [])
     assert routed.reply != APPROVAL_REPLY
+
+
+def test_missing_signal_is_unknown_not_zero() -> None:
+    missing_cpu = GoldenSignalMetrics(
+        service="payment-api",
+        error_rate_5xx_percent=0.0,
+        request_rate_per_sec=8.0,
+        p95_latency_ms=35.0,
+        cpu_usage_percent=0.0,
+        memory_usage_percent=0.0,
+        missing_signals=["cpu_usage_percent"],
+        collected_at=datetime.now(UTC),
+    )
+    table = golden_table(missing_cpu)
+    assert "| CPU usage | `n/a` | ⚪ not collected |" in table
+    verdict = status_verdict("payment-api", missing_cpu, "1 min", HEALTHY)
+    assert "CPU n/a" in verdict
+    assert "CPU `0.0%`" not in verdict
+
+
+def test_missing_request_metrics_are_not_reported_as_no_traffic() -> None:
+    missing_rate = GoldenSignalMetrics(
+        service="payment-api",
+        error_rate_5xx_percent=0.0,
+        request_rate_per_sec=0.0,
+        p95_latency_ms=0.0,
+        cpu_usage_percent=5.0,
+        memory_usage_percent=0.0,
+        missing_signals=["request_rate_per_sec", "error_rate_5xx_percent", "p95_latency_ms"],
+        collected_at=datetime.now(UTC),
+    )
+    assert "not available" in status_verdict("payment-api", missing_rate, "1 min", HEALTHY)
