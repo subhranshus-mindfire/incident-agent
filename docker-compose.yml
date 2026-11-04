@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: postgrespassword
       POSTGRES_DB: incident_db
     ports:
-      - "5434:5432"
+      - "127.0.0.1:5434:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -20,11 +20,11 @@ services:
       - incident-network
 
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.35.1
     container_name: incident-agent-ollama
     restart: unless-stopped
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     volumes:
       - ollama_data:/root/.ollama
     networks:
@@ -35,7 +35,7 @@ services:
     container_name: incident-agent-redis
     restart: unless-stopped
     ports:
-      - "6380:6379"
+      - "127.0.0.1:6380:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -51,8 +51,8 @@ services:
     container_name: incident-agent-qdrant
     restart: unless-stopped
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:
@@ -68,7 +68,7 @@ services:
     container_name: incident-agent-prometheus
     restart: unless-stopped
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     volumes:
       - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
@@ -90,7 +90,7 @@ services:
     restart: unless-stopped
     user: "0:0"
     ports:
-      - "3100:3100"
+      - "127.0.0.1:3100:3100"
     volumes:
       - ./observability/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
       - loki_data:/tmp/loki
@@ -112,7 +112,7 @@ services:
     restart: unless-stopped
     command: ["uvicorn", "simulation.services.payment_api:app", "--host", "0.0.0.0", "--port", "8080"]
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       - LOKI_URL=http://loki:3100
     depends_on:
@@ -135,12 +135,12 @@ services:
     container_name: incident-agent-app
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       - APP_NAME=Incident Investigation Agent
       - APP_VERSION=0.1.0
       - ENVIRONMENT=development
-      - DEBUG=true
+      - DEBUG=false
       - HOST=0.0.0.0
       - PORT=8000
       - DATABASE_URL=postgresql+asyncpg://postgres:postgrespassword@postgres:5432/incident_db
@@ -206,7 +206,7 @@ services:
     restart: unless-stopped
     command: ["streamlit", "run", "ui/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
     ports:
-      - "8501:8501"
+      - "127.0.0.1:8501:8501"
     environment:
       - AGENT_API_URL=http://app:8000
       - PROMETHEUS_URL=http://prometheus:9090
