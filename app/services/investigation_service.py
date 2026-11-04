@@ -7,6 +7,7 @@ from langgraph.graph.state import CompiledStateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.graph import get_investigation_graph
+from app.agents.severity import classify_severity
 from app.constants.enums import (
     AuditAction,
     EvidenceType,
@@ -59,10 +60,14 @@ class InvestigationService:
         incident_id: str,
         service: str,
         symptoms: str,
-        severity: IncidentSeverity = IncidentSeverity.HIGH,
+        severity: IncidentSeverity | None = None,
         actor: str = "system",
     ) -> dict[str, Any]:
-        """Initiates an autonomous investigation workflow for an incident. `actor` is the signed-in user."""
+        """Initiates an autonomous investigation workflow. `actor` is the signed-in user.
+
+        Without an explicit severity, the level is classified from the symptoms.
+        """
+        severity = severity or classify_severity(symptoms)
         config = self._get_config(incident_id)
 
         initial_state: InvestigationState = {

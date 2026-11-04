@@ -1,0 +1,4 @@
+[
+  {"timestamp": "2026-11-02T10:15:00Z", "service": "payment-api", "level": "ERROR", "message": "ERROR 500, Database connection timeout at 10:15"},
+  {"timestamp": "2026-11-02T10:16:00Z", "service": "payment-api", "level": "ERROR", "message": "ERROR 500, Connection pool exhausted at 10:16"}
+]

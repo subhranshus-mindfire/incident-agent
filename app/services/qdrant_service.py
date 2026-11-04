@@ -9,7 +9,7 @@ from app.constants.patterns import UUID_REGEX
 from app.exceptions.domain import ExternalServiceException
 from app.schemas.agent_state import HistoricalIncident
 from app.schemas.runbook import Runbook, RunbookSearchResult
-from app.seed.historical_incidents import DEFAULT_HISTORICAL_INCIDENTS
+from app.seed.datasets import load_historical_incidents
 from app.services.embedding_service import EmbeddingService, get_embedding_service
 
 logger = logging.getLogger("incident_agent.qdrant_service")
@@ -316,7 +316,7 @@ class QdrantService:
     async def seed_historical_incidents(self) -> int:
         """Seeds default historical incidents into Qdrant."""
         points: list[models.PointStruct] = []
-        for inc in DEFAULT_HISTORICAL_INCIDENTS:
+        for inc in load_historical_incidents():
             text = incident_document_text(
                 inc.service, inc.symptoms, inc.root_cause, inc.remediation
             )

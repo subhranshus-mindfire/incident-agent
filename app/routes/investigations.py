@@ -35,8 +35,8 @@ class TriggerInvestigationRequest(BaseModel):
     symptoms: str = Field(
         ..., min_length=5, description="Observed symptom or alert notification text"
     )
-    severity: IncidentSeverity = Field(
-        default=IncidentSeverity.HIGH, description="Incident severity level"
+    severity: IncidentSeverity | None = Field(
+        default=None, description="Incident severity. Classified from the symptoms when omitted."
     )
 
 

@@ -14,7 +14,6 @@ from pydantic import BeforeValidator
 
 from app.auth.context import current_actor
 from app.config.database import async_session_factory
-from app.constants.enums import IncidentSeverity
 from app.constants.live import MAX_WINDOW_SECONDS, MIN_WINDOW_SECONDS
 from app.constants.llm import (
     MAX_LIST_ROWS,
@@ -136,7 +135,6 @@ async def start_investigation(service: ServiceName, symptoms: str) -> dict[str, 
                 incident_id=incident_id,
                 service=service,
                 symptoms=symptoms[:500],
-                severity=IncidentSeverity.CRITICAL,
                 actor=current_actor(),
             )
     except Exception as exc:
