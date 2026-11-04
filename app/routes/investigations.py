@@ -6,13 +6,18 @@ from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.api_key import require_api_key
 from app.config.database import get_db_session
 from app.constants.enums import IncidentSeverity
 from app.services.investigation_service import InvestigationService, summarize_trigger
 
 logger = logging.getLogger("incident_agent.routes.investigations")
 
-router = APIRouter(prefix="/investigations", tags=["Investigations & LangGraph Agent"])
+router = APIRouter(
+    prefix="/investigations",
+    tags=["Investigations & LangGraph Agent"],
+    dependencies=[Depends(require_api_key)],
+)
 
 
 def get_investigation_service(

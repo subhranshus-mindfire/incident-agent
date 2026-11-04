@@ -8,10 +8,14 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from app.config.config import settings as app_settings
 from app.config.database import Base, get_db_session
 from app.main import app
 from app.services import clients
 from app.utils.http_client import close_shared_http_client
+
+TEST_API_KEY = "test-api-key"
+app_settings.API_KEY = TEST_API_KEY
 
 # Isolated in-memory async SQLite engine for lightning-fast testing
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -54,7 +58,9 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     app.dependency_overrides[get_db_session] = override_get_db_session
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as async_client:
+    async with AsyncClient(
+        transport=transport, base_url="http://testserver", headers={"X-API-Key": TEST_API_KEY}
+    ) as async_client:
         yield async_client
 
     app.dependency_overrides.clear()

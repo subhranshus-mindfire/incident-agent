@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query, status
 
+from app.auth.api_key import require_api_key
 from app.exceptions.domain import EntityNotFoundException, ValidationException
 from app.schemas.runbook import (
     Runbook,
@@ -32,6 +33,7 @@ def get_qdrant_service() -> QdrantService:
     response_model=Runbook,
     status_code=status.HTTP_201_CREATED,
     summary="Create & Index Runbook",
+    dependencies=[Depends(require_api_key)],
 )
 async def create_runbook(
     payload: RunbookCreate,
@@ -79,6 +81,7 @@ async def qdrant_health_probe(
     response_model=dict[str, Any],
     status_code=status.HTTP_200_OK,
     summary="Seed Default Production Runbooks",
+    dependencies=[Depends(require_api_key)],
 )
 async def seed_production_runbooks(
     qdrant: QdrantService = Depends(get_qdrant_service),
@@ -141,6 +144,7 @@ async def get_runbook(
     "/{runbook_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete Runbook",
+    dependencies=[Depends(require_api_key)],
 )
 async def delete_runbook(
     runbook_id: str,

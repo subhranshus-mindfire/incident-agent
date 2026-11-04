@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str | None = None
     GROQ_MODEL: str = "openai/gpt-oss-120b"
     GEMINI_API_KEY: str | None = None
+
+    # Access control: clients send this key in the X-API-Key header.
+    API_KEY: str | None = None
+    CHAT_REQUESTS_PER_MINUTE: int = 30
     GEMINI_MODEL: str = "gemini-2.5-flash"
     OLLAMA_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen2.5:3b"
