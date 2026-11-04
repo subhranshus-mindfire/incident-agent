@@ -21,48 +21,42 @@ logging.basicConfig(
 )
 logger = logging.getLogger("incident_agent")
 
+app = FastAPI(
+    title=settings.APP_NAME,
+    version=settings.APP_VERSION,
+    description="Autonomous Incident Investigation & Remediation Platform",
+    lifespan=lifespan,
+)
 
-def create_application() -> FastAPI:
-    """FastAPI application factory with production configurations."""
-    application = FastAPI(
-        title=settings.APP_NAME,
-        version=settings.APP_VERSION,
-        description="Autonomous Incident Investigation & Remediation Platform",
-        lifespan=lifespan,
-    )
+# CORS configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    # CORS configuration
-    application.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.ALLOWED_ORIGINS,
-        allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+# Exception handlers (RFC 7807)
+app.add_exception_handler(AppException, app_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(Exception, generic_exception_handler)
 
-    # Exception Handlers (RFC 7807)
-    application.add_exception_handler(AppException, app_exception_handler)
-    application.add_exception_handler(RequestValidationError, validation_exception_handler)
-    application.add_exception_handler(Exception, generic_exception_handler)
-
-    # Include Routers
-    application.include_router(health_router)
-    application.include_router(api_router, prefix=settings.API_V1_PREFIX)
-
-    @application.get("/", tags=["Root"])
-    async def root() -> dict[str, str]:
-        return {
-            "name": settings.APP_NAME,
-            "version": settings.APP_VERSION,
-            "docs": "/docs",
-            "health": "/health",
-            "api": settings.API_V1_PREFIX,
-        }
-
-    return application
+# Routers
+app.include_router(health_router)
+app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 
 
-app = create_application()
+@app.get("/", tags=["Root"])
+async def root() -> dict[str, str]:
+    return {
+        "name": settings.APP_NAME,
+        "version": settings.APP_VERSION,
+        "docs": "/docs",
+        "health": "/health",
+        "api": settings.API_V1_PREFIX,
+    }
+
 
 if __name__ == "__main__":
     import uvicorn
