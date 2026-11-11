@@ -46,6 +46,32 @@ async def test_read_routes_stay_open(db_session: AsyncSession) -> None:
     assert res.status_code == 200
 
 
+async def test_incident_routes_without_sign_in_are_refused(db_session: AsyncSession) -> None:
+    async with anonymous_client(db_session) as client:
+        listed = await client.get("/api/v1/incidents")
+        single = await client.get("/api/v1/incidents/any-id")
+        changed = await client.patch(
+            "/api/v1/incidents/any-id/status", json={"status": "resolved", "reason": "x"}
+        )
+    assert listed.status_code == 401
+    assert single.status_code == 401
+    assert changed.status_code == 401
+
+
+async def test_telemetry_routes_without_sign_in_are_refused(db_session: AsyncSession) -> None:
+    async with anonymous_client(db_session) as client:
+        metrics = await client.get("/api/v1/telemetry/metrics/query", params={"query": "up"})
+        logs = await client.get("/api/v1/telemetry/logs/query", params={"query": "{}"})
+    assert metrics.status_code == 401
+    assert logs.status_code == 401
+
+
+async def test_runbook_reads_without_sign_in_are_refused(db_session: AsyncSession) -> None:
+    async with anonymous_client(db_session) as client:
+        listed = await client.get("/api/v1/runbooks")
+    assert listed.status_code == 401
+
+
 async def test_investigation_state_without_sign_in_is_refused(db_session: AsyncSession) -> None:
     async with anonymous_client(db_session) as client:
         res = await client.get("/api/v1/investigations/any-id")
