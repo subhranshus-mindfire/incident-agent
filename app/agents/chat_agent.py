@@ -70,11 +70,9 @@ def _to_messages(history: list[dict[str, str]], message: str) -> list[BaseMessag
     return messages
 
 
-async def run_chat(
-    message: str, history: list[dict[str, str]], approval_pending: bool = False
-) -> dict[str, Any]:
+async def run_chat(message: str, history: list[dict[str, str]]) -> dict[str, Any]:
     """Runs one chat turn: fixed or live answers first, otherwise the model calls tools and answers from them."""
-    routed = await route_message(message, history, approval_pending)
+    routed = await route_message(message)
     if routed.reply is not None:
         return {"reply": routed.reply, "incident": None}
     message = routed.text

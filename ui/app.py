@@ -454,7 +454,6 @@ def _answer(prompt: str) -> None:
                 data={
                     "message": prompt,
                     "history": history,
-                    "approval_pending": st.session_state.current_incident is not None,
                 },
                 timeout=300.0,
                 headers=_auth_headers(),
