@@ -4,6 +4,7 @@ from typing import Any
 
 from app.agents.approval_policy import needs_human_approval
 from app.constants.enums import IncidentStatus
+from app.constants.live import DEFAULT_WINDOW_SECONDS
 from app.constants.remediation import (
     FAULT_REMEDIATIONS,
     VERIFY_SETTLE_SECONDS,
@@ -466,7 +467,7 @@ async def node_verify_health(state: InvestigationState) -> dict[str, Any]:
         await asyncio.sleep(VERIFY_SETTLE_SECONDS)
         try:
             current = await get_prometheus_service().get_golden_signals(
-                service=state["service"], window_minutes=1
+                service=state["service"], window_seconds=DEFAULT_WINDOW_SECONDS
             )
         except Exception as exc:
             logger.warning(f"[Node 9: VerifyHealth] Prometheus probe failed: {exc}")
@@ -489,7 +490,7 @@ async def node_verify_health(state: InvestigationState) -> dict[str, Any]:
                 "p95_latency_ms",
                 "request_rate_per_sec",
             }
-            has_traffic = current.request_rate_per_sec > 0 and not not_collected
+            has_traffic = current.rates_measured and not not_collected
             within_thresholds = (
                 current.error_rate_5xx_percent < ERROR_RATE_FAULT_PCT
                 and current.p95_latency_ms < LATENCY_FAULT_MS

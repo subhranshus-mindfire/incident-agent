@@ -15,6 +15,7 @@ from app.constants.enums import (
     IncidentStatus,
     InvestigationStatus,
 )
+from app.constants.live import DEFAULT_WINDOW_SECONDS
 from app.exceptions.domain import EntityNotFoundException, InvalidStateTransitionException
 from app.models.incident import Incident
 from app.models.investigation import Investigation
@@ -35,7 +36,7 @@ async def _severity_from_live_evidence(service: str) -> IncidentSeverity:
     """Severity from the service's measured golden signals. Falls back to MEDIUM if they can't be read."""
     try:
         signals = await get_prometheus_service().get_golden_signals(
-            service=service, window_seconds=300
+            service=service, window_seconds=DEFAULT_WINDOW_SECONDS
         )
     except Exception as exc:
         logger.warning(f"Severity fell back to MEDIUM; golden signals unavailable: {exc}")

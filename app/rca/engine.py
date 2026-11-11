@@ -49,13 +49,27 @@ class SREInvestigationEngine:
         # 1. Telemetry signal extraction
         high_cpu = telemetry.cpu_usage_pct >= CPU_CRITICAL_PCT if telemetry else False
         high_mem = telemetry.memory_usage_pct >= MEMORY_CRITICAL_PCT if telemetry else False
-        high_err = telemetry.http_error_rate_pct >= ERROR_RATE_CRITICAL_PCT if telemetry else False
-        high_lat = telemetry.p99_latency_seconds >= LATENCY_FAULT_MS / 1000 if telemetry else False
+        # Error rate and latency are rules only when the window had enough requests to measure them.
+        traffic_measured = telemetry is not None and telemetry.rates_measured
+        high_err = (
+            traffic_measured and telemetry.http_error_rate_pct >= ERROR_RATE_CRITICAL_PCT
+            if telemetry
+            else False
+        )
+        high_lat = (
+            traffic_measured and telemetry.p99_latency_seconds >= LATENCY_FAULT_MS / 1000
+            if telemetry
+            else False
+        )
 
         if telemetry:
-            citations.append(
-                f"Prometheus: CPU={telemetry.cpu_usage_pct}%, Mem={telemetry.memory_usage_pct}%, "
+            rate_text = (
                 f"ErrRate={telemetry.http_error_rate_pct}%, p99Latency={telemetry.p99_latency_seconds}s"
+                if traffic_measured
+                else "ErrRate and p99Latency not measured (too few requests in the window)"
+            )
+            citations.append(
+                f"Prometheus: CPU={telemetry.cpu_usage_pct}%, Mem={telemetry.memory_usage_pct}%, {rate_text}"
             )
 
         log_text = " ".join([entry.sample_line.lower() for entry in logs])

@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from app.constants.live import DEFAULT_WINDOW_SECONDS
 from app.constants.remediation import (
     FAULT_REMEDIATIONS,
     PAYMENT_API_REMEDIATIONS,
@@ -73,12 +74,13 @@ async def get_system_metrics(
     """Tool 2: Retrieves Prometheus golden signals (error rate, latency, CPU, memory)."""
     prom = get_prometheus_service()
     try:
-        gs = await prom.get_golden_signals(service=service)
+        gs = await prom.get_golden_signals(service=service, window_seconds=DEFAULT_WINDOW_SECONDS)
         if isinstance(gs, GoldenSignalMetrics):
             anomalies: list[str] = []
-            if gs.error_rate_5xx_percent > ERROR_RATE_CRITICAL_PCT:
+            # Error rate and latency are reported only when the window had enough requests to measure them.
+            if gs.rates_measured and gs.error_rate_5xx_percent > ERROR_RATE_CRITICAL_PCT:
                 anomalies.append(f"High 5xx error rate: {gs.error_rate_5xx_percent:.1f}%")
-            if gs.p95_latency_ms > LATENCY_FAULT_MS:
+            if gs.rates_measured and gs.p95_latency_ms > LATENCY_FAULT_MS:
                 anomalies.append(f"Elevated p95 latency: {gs.p95_latency_ms:.0f}ms")
             if gs.cpu_usage_percent > CPU_CRITICAL_PCT:
                 anomalies.append(f"Severe CPU saturation: {gs.cpu_usage_percent:.1f}%")
@@ -90,6 +92,7 @@ async def get_system_metrics(
                 cpu_usage_pct=gs.cpu_usage_percent,
                 memory_usage_pct=gs.memory_usage_percent,
                 detected_anomalies=anomalies,
+                rates_measured=gs.rates_measured,
             )
     except Exception as exc:
         logger.warning(f"Prometheus fetch failed: {exc}")

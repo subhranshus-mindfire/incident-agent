@@ -109,6 +109,8 @@ class TelemetrySummary(BaseModel):
     cpu_usage_pct: float = 0.0
     memory_usage_pct: float = 0.0
     detected_anomalies: list[str] = Field(default_factory=list)
+    # True when the window had enough requests for the error rate and latency to be measurements.
+    rates_measured: bool = False
     collected_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
