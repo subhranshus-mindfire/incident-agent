@@ -431,7 +431,8 @@ async def node_execute_remediation(state: InvestigationState) -> dict[str, Any]:
         )
 
     executed_list = state.get("executed_actions", []) + [result]
-    new_status = IncidentStatus.RESOLVED if result.success else IncidentStatus.INVESTIGATING
+    # Executing the action does not resolve the incident; the health check after it does.
+    new_status = IncidentStatus.INVESTIGATING
 
     return {
         "executed_actions": executed_list,
@@ -506,6 +507,16 @@ async def node_verify_health(state: InvestigationState) -> dict[str, Any]:
                     if within_thresholds
                     else "Still above stability thresholds."
                 )
+            error_now = (
+                "not collected"
+                if "error_rate_5xx_percent" in not_collected
+                else f"{current.error_rate_5xx_percent:.2f}%"
+            )
+            latency_now = (
+                "not collected"
+                if "p95_latency_ms" in not_collected
+                else f"{current.p95_latency_ms:.0f}ms"
+            )
             report = HealthVerificationReport(
                 stabilized=stabilized,
                 previous_error_rate=prev_error,
@@ -514,14 +525,15 @@ async def node_verify_health(state: InvestigationState) -> dict[str, Any]:
                 current_latency_ms=current.p95_latency_ms,
                 observation_window_seconds=VERIFY_SETTLE_SECONDS,
                 details=(
-                    f"5xx error rate {prev_error:.2f}% -> {current.error_rate_5xx_percent:.2f}%; "
-                    f"p95 latency {prev_latency_ms:.0f}ms -> {current.p95_latency_ms:.0f}ms. {outcome}"
+                    f"5xx error rate {prev_error:.2f}% -> {error_now}; "
+                    f"p95 latency {prev_latency_ms:.0f}ms -> {latency_now}. {outcome}"
                 ),
             )
 
     return {
         "verification_results": report,
         "verification_report": report,
+        "status": IncidentStatus.RESOLVED if report.stabilized else IncidentStatus.INVESTIGATING,
         "audit_events": [
             f"Health verification completed: Stabilized={report.stabilized} ({report.details})"
         ],
@@ -538,7 +550,8 @@ async def node_persist_incident_memory(state: InvestigationState) -> dict[str, A
 
     root_cause = top_hypo.root_cause if top_hypo else "Undetermined"
     remediation = exec_result.action_type if exec_result else "None"
-    outcome = "RESOLVED" if (exec_result and exec_result.success) else "UNRESOLVED"
+    verif = state.get("verification_report")
+    outcome = "RESOLVED" if (verif and verif.stabilized) else "UNRESOLVED"
 
     try:
         qdrant = get_shared_qdrant_service()
