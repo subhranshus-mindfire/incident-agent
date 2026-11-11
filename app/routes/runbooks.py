@@ -20,9 +20,7 @@ from app.services.qdrant_service import (
 
 logger = logging.getLogger("incident_agent.routes.runbooks")
 
-router = APIRouter(
-    prefix="/runbooks", tags=["Runbooks & Knowledge Base"], dependencies=[Depends(current_user)]
-)
+router = APIRouter(prefix="/runbooks", tags=["Runbooks & Knowledge Base"])
 
 
 def get_qdrant_service() -> QdrantService:

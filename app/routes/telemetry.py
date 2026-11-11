@@ -2,9 +2,8 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from app.auth.current_user import current_user
 from app.schemas.telemetry import (
     AnomalyAlert,
     GoldenSignalMetrics,
@@ -21,11 +20,12 @@ logger = logging.getLogger("incident_agent.routes.telemetry")
 # Raw PromQL and LogQL run whatever the caller writes, so each user gets a small budget per minute.
 _raw_query_limiter = SlidingWindowLimiter(limit=20, window_seconds=60)
 
-router = APIRouter(
-    prefix="/telemetry",
-    tags=["Observability & Telemetry"],
-    dependencies=[Depends(current_user)],
-)
+
+def _client_key(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+router = APIRouter(prefix="/telemetry", tags=["Observability & Telemetry"])
 
 SERVICE_QUERY_PARAM = Query(
     ...,
@@ -39,12 +39,12 @@ SERVICE_QUERY_PARAM = Query(
 
 @router.get("/metrics/query", response_model=MetricQueryResult, status_code=status.HTTP_200_OK)
 async def query_prometheus_metrics(
+    request: Request,
     query: str = Query(..., description="PromQL query expression"),
-    username: str = Depends(current_user),
     prom_service: PrometheusService = Depends(get_prometheus_service),
 ) -> MetricQueryResult:
     """Executes an instant PromQL metric query against Prometheus."""
-    if not _raw_query_limiter.allow(username):
+    if not _raw_query_limiter.allow(_client_key(request)):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many raw queries"
         )
@@ -89,6 +89,7 @@ async def detect_service_anomalies(
 
 @router.get("/logs/query", response_model=LogQueryResult, status_code=status.HTTP_200_OK)
 async def query_loki_logs(
+    request: Request,
     query: str = Query(..., description="LogQL query expression"),
     window_minutes: int = Query(15, ge=1, le=120, description="Time window in minutes"),
     window_seconds: int | None = Query(
@@ -96,11 +97,10 @@ async def query_loki_logs(
     ),
     limit: int = Query(100, ge=1, le=500, description="Maximum raw lines to scan"),
     deduplicate: bool = Query(True, description="Cluster and deduplicate recurring error lines"),
-    username: str = Depends(current_user),
     loki_service: LokiService = Depends(get_loki_service),
 ) -> LogQueryResult:
     """Queries Grafana Loki logs with automatic secret redaction and log deduplication."""
-    if not _raw_query_limiter.allow(username):
+    if not _raw_query_limiter.allow(_client_key(request)):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many raw queries"
         )
