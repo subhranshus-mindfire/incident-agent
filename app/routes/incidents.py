@@ -1,13 +1,14 @@
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.current_user import current_user
 from app.config.database import get_db_session
 from app.constants.enums import IncidentSeverity, IncidentStatus
 from app.exceptions.domain import IncidentNotFoundException
 from app.schemas.incident import IncidentCreate, IncidentResponse, IncidentUpdateStatus
 from app.services.incident_service import IncidentService
 
-router = APIRouter(prefix="/incidents", tags=["Incidents"])
+router = APIRouter(prefix="/incidents", tags=["Incidents"], dependencies=[Depends(current_user)])
 
 
 def get_incident_service(session: AsyncSession = Depends(get_db_session)) -> IncidentService:

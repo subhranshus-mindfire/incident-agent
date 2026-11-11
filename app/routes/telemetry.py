@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query, status
 
+from app.auth.current_user import current_user
 from app.schemas.telemetry import (
     AnomalyAlert,
     GoldenSignalMetrics,
@@ -16,7 +17,11 @@ from app.services.loki_service import LokiService
 from app.services.prometheus_service import PrometheusService
 
 logger = logging.getLogger("incident_agent.routes.telemetry")
-router = APIRouter(prefix="/telemetry", tags=["Observability & Telemetry"])
+router = APIRouter(
+    prefix="/telemetry",
+    tags=["Observability & Telemetry"],
+    dependencies=[Depends(current_user)],
+)
 
 SERVICE_QUERY_PARAM = Query(
     ...,
