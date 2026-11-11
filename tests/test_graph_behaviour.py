@@ -78,18 +78,3 @@ async def test_second_execution_of_the_same_action_is_skipped(
     assert calls == []
     assert update["execution_result"] is earlier
     assert any("Duplicate skipped" in event for event in update["audit_events"])
-
-
-@pytest.mark.parametrize(
-    ("symptoms", "expected"),
-    [
-        ("Payment service is down for all customers", IncidentSeverity.CRITICAL),
-        ("HTTP 500 errors and connection pool timeouts", IncidentSeverity.HIGH),
-        ("Checkout latency is slow this morning", IncidentSeverity.HIGH),
-        ("Please review the dashboard layout", IncidentSeverity.MEDIUM),
-    ],
-)
-def test_severity_is_classified_from_symptoms(symptoms: str, expected: IncidentSeverity) -> None:
-    from app.agents.severity import classify_severity
-
-    assert classify_severity(symptoms) == expected

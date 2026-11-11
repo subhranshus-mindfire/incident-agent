@@ -7,7 +7,7 @@ from langgraph.graph.state import CompiledStateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.graph import get_investigation_graph
-from app.agents.severity import classify_severity
+from app.agents.severity import severity_from_evidence
 from app.constants.enums import (
     AuditAction,
     EvidenceType,
@@ -25,9 +25,22 @@ from app.schemas.agent_state import (
     ApprovalStatus,
     InvestigationState,
 )
+from app.services.clients import get_prometheus_service
 from app.utils.serialization import as_plain_dict
 
 logger = logging.getLogger("incident_agent.investigation_service")
+
+
+async def _severity_from_live_evidence(service: str) -> IncidentSeverity:
+    """Severity from the service's measured golden signals. Falls back to MEDIUM if they can't be read."""
+    try:
+        signals = await get_prometheus_service().get_golden_signals(
+            service=service, window_seconds=300
+        )
+    except Exception as exc:
+        logger.warning(f"Severity fell back to MEDIUM; golden signals unavailable: {exc}")
+        return IncidentSeverity.MEDIUM
+    return severity_from_evidence(signals)
 
 
 class InvestigationService:
@@ -78,7 +91,7 @@ class InvestigationService:
 
         Without an explicit severity, the level is classified from the symptoms.
         """
-        severity = severity or classify_severity(symptoms)
+        severity = severity or await _severity_from_live_evidence(service)
         config = self._get_config(incident_id, service=service, severity=severity.value)
 
         initial_state: InvestigationState = {
