@@ -9,6 +9,7 @@ from typing import Any
 from groq import BadRequestError
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
+from app.agents.grounding import unsupported_figures
 from app.agents.router import route_message
 from app.config.config import get_settings
 from app.constants.llm import (
@@ -38,6 +39,36 @@ def _message_text(message: BaseMessage) -> str:
         block.get("text", "")
         for block in content
         if isinstance(block, dict) and block.get("type") == "text"
+    )
+
+
+async def _grounded_reply(base_llm: Any, messages: list[BaseMessage], text: str) -> str:
+    """The reply, if every figure in it came from a tool result. Otherwise the model gets one rewrite,
+    and if the rewrite still has figures no tool returned, the figures are withheld."""
+    tool_results = [str(m.content) for m in messages if isinstance(m, ToolMessage)]
+    unsupported = unsupported_figures(text, tool_results)
+    if not unsupported:
+        return text
+
+    logger.warning(f"Chat reply has figures no tool returned: {unsupported}")
+    if not isinstance(messages[-1], AIMessage):
+        messages = messages + [AIMessage(content=text)]
+    rewrite = HumanMessage(
+        content=(
+            f"These figures are not in any tool result: {', '.join(unsupported)}. Rewrite the answer "
+            "using only figures from the tool results, or say the value was not measured. Do not call tools."
+        )
+    )
+    try:
+        retried = _message_text(await base_llm.ainvoke(messages + [rewrite]))
+    except Exception as exc:
+        logger.error(f"Grounding rewrite failed: {exc}")
+        retried = ""
+    if retried and not unsupported_figures(retried, tool_results):
+        return retried
+    return (
+        "I could not confirm some figures in my answer against the tool results, so I am not "
+        "reporting them. Ask again, or check the console."
     )
 
 
@@ -107,7 +138,8 @@ async def run_chat(message: str, history: list[dict[str, str]]) -> dict[str, Any
             }
         messages.append(ai_message)
         if not ai_message.tool_calls:
-            return {"reply": _message_text(ai_message), "incident": incident}
+            reply = await _grounded_reply(base_llm, messages, _message_text(ai_message))
+            return {"reply": reply, "incident": incident}
 
         for call in ai_message.tool_calls:
             tool_fn = _TOOLS_BY_NAME.get(call["name"])
@@ -144,4 +176,5 @@ async def run_chat(message: str, history: list[dict[str, str]]) -> dict[str, Any
             "reply": "I could not finish the analysis. Try a narrower question.",
             "incident": incident,
         }
-    return {"reply": _message_text(final), "incident": incident}
+    reply = await _grounded_reply(base_llm, messages, _message_text(final))
+    return {"reply": reply, "incident": incident}
