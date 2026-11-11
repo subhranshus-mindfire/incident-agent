@@ -15,11 +15,11 @@ from app.schemas.telemetry import (
 from app.services.clients import get_loki_service, get_prometheus_service
 from app.services.loki_service import LokiService
 from app.services.prometheus_service import PrometheusService
-from app.utils.rate_limit import SlidingWindowLimiter
+from app.utils.rate_limit import shared_limiter
 
 logger = logging.getLogger("incident_agent.routes.telemetry")
 # Raw PromQL and LogQL run whatever the caller writes, so each user gets a small budget per minute.
-_raw_query_limiter = SlidingWindowLimiter(limit=20, window_seconds=60)
+_raw_query_limiter = shared_limiter("raw-query", limit=20, window_seconds=60)
 
 router = APIRouter(
     prefix="/telemetry",
@@ -44,7 +44,7 @@ async def query_prometheus_metrics(
     prom_service: PrometheusService = Depends(get_prometheus_service),
 ) -> MetricQueryResult:
     """Executes an instant PromQL metric query against Prometheus."""
-    if not _raw_query_limiter.allow(username):
+    if not await _raw_query_limiter.allow(username):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many raw queries"
         )
@@ -100,7 +100,7 @@ async def query_loki_logs(
     loki_service: LokiService = Depends(get_loki_service),
 ) -> LogQueryResult:
     """Queries Grafana Loki logs with automatic secret redaction and log deduplication."""
-    if not _raw_query_limiter.allow(username):
+    if not await _raw_query_limiter.allow(username):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many raw queries"
         )

@@ -21,8 +21,9 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/incident_db"
 
-    # Redis
+    # Redis: shared rate limits across workers. "memory" keeps the counts in each process instead.
     REDIS_URL: str = "redis://localhost:6379/0"
+    RATE_LIMIT_STORE: Literal["redis", "memory"] = "redis"
 
     # Qdrant & Embeddings
     QDRANT_HOST: str = "localhost"
@@ -62,6 +63,10 @@ class Settings(BaseSettings):
             problems.append("ALLOWED_ORIGINS allows every origin")
         if self.DEBUG:
             problems.append("DEBUG is enabled")
+        if self.RATE_LIMIT_STORE == "redis" and "localhost" in self.REDIS_URL:
+            problems.append(
+                "REDIS_URL points at localhost, so workers on other hosts share no limits"
+            )
         if problems:
             raise ValueError("Unsafe production settings: " + "; ".join(problems))
         return self

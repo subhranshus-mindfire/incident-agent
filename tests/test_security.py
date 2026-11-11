@@ -144,6 +144,7 @@ def test_production_accepts_explicit_settings_and_development_keeps_defaults() -
         ENVIRONMENT="production",
         DATABASE_URL="postgresql+asyncpg://app:strong-secret@db:5432/incident_db",
         ALLOWED_ORIGINS=["https://console.example.com"],
+        REDIS_URL="redis://cache.internal:6379/0",
     )
     assert prod.ALLOWED_ORIGINS == ["https://console.example.com"]
 
@@ -154,11 +155,11 @@ def test_production_accepts_explicit_settings_and_development_keeps_defaults() -
 async def test_raw_metric_queries_are_rate_limited(client: httpx.AsyncClient) -> None:
     from app.routes import telemetry
 
-    telemetry._raw_query_limiter._hits.clear()
+    telemetry._raw_query_limiter.clear_local()
     statuses = [
         (await client.get("/api/v1/telemetry/metrics/query", params={"query": "up"})).status_code
         for _ in range(telemetry._raw_query_limiter.limit + 1)
     ]
-    telemetry._raw_query_limiter._hits.clear()
+    telemetry._raw_query_limiter.clear_local()
     assert statuses[-1] == 429
     assert 429 not in statuses[:-1]

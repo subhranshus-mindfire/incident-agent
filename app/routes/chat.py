@@ -7,11 +7,11 @@ from app.agents.chat_agent import run_chat
 from app.auth.context import set_actor
 from app.auth.current_user import current_user
 from app.config.config import settings
-from app.utils.rate_limit import SlidingWindowLimiter
+from app.utils.rate_limit import shared_limiter
 
 router = APIRouter(prefix="/chat", tags=["Chat"], dependencies=[Depends(current_user)])
 
-_chat_limiter = SlidingWindowLimiter(limit=settings.CHAT_REQUESTS_PER_MINUTE, window_seconds=60)
+_chat_limiter = shared_limiter("chat", limit=settings.CHAT_REQUESTS_PER_MINUTE, window_seconds=60)
 
 
 class ChatTurn(BaseModel):
@@ -35,7 +35,7 @@ async def chat(
 ) -> dict[str, Any]:
     """Answers a free-form question using live telemetry tools; may open an investigation."""
     client = request.client.host if request.client else "unknown"
-    if not _chat_limiter.allow(client):
+    if not await _chat_limiter.allow(client):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many chat requests; wait a minute",

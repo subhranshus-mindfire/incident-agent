@@ -9,11 +9,11 @@ from app.auth.passwords import verify_password
 from app.auth.sessions import SESSION_HOURS, create_session, end_session
 from app.config.database import get_db_session
 from app.models.user import User
-from app.utils.rate_limit import SlidingWindowLimiter
+from app.utils.rate_limit import shared_limiter
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
-_login_limiter = SlidingWindowLimiter(limit=10, window_seconds=60)
+_login_limiter = shared_limiter("login", limit=10, window_seconds=60)
 
 
 class LoginRequest(BaseModel):
@@ -26,7 +26,7 @@ async def login(
     payload: LoginRequest, request: Request, db: AsyncSession = Depends(get_db_session)
 ) -> dict[str, Any]:
     client = request.client.host if request.client else "unknown"
-    if not _login_limiter.allow(client):
+    if not await _login_limiter.allow(client):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many sign-in attempts"
         )
