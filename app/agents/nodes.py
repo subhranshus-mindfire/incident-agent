@@ -2,7 +2,8 @@ import asyncio
 import logging
 from typing import Any
 
-from app.constants.enums import IncidentSeverity, IncidentStatus
+from app.agents.approval_policy import needs_human_approval
+from app.constants.enums import IncidentStatus
 from app.constants.remediation import (
     FAULT_REMEDIATIONS,
     VERIFY_SETTLE_SECONDS,
@@ -20,7 +21,6 @@ from app.schemas.agent_state import (
     RCAHypothesis,
     RemediationActionType,
     RemediationExecutionResult,
-    RiskTier,
 )
 from app.schemas.telemetry import GoldenSignalMetrics
 from app.services.clients import get_prometheus_service
@@ -342,17 +342,18 @@ async def node_assess_blast_radius(state: InvestigationState) -> dict[str, Any]:
         severity=state["severity"],
     )
 
-    # Determine approval requirement based on risk tier and severity
-    if proposal.risk_tier == RiskTier.LOW and state["severity"] == IncidentSeverity.MEDIUM:
-        approval_status = ApprovalStatus.AUTO_APPROVED
-        proposal.requires_approval = False
-    else:
-        approval_status = ApprovalStatus.PENDING
-        proposal.requires_approval = True
+    needs_approval = needs_human_approval(proposal.risk_tier, state["severity"])
+    proposal.requires_approval = needs_approval
+    approval_status = ApprovalStatus.PENDING if needs_approval else ApprovalStatus.AUTO_APPROVED
+    approval_note = (
+        "Approval: MANDATORY"
+        if needs_approval
+        else "Approval: AUTOMATIC (medium severity, low or medium risk)"
+    )
 
     logger.info(
         f"[Node 6: AssessBlastRadius] Action: {proposal.action_type.value}, "
-        f"Risk: {proposal.risk_tier.value.upper()}, RequiresApproval: True"
+        f"Risk: {proposal.risk_tier.value.upper()}, RequiresApproval: {needs_approval}"
     )
 
     return {
@@ -362,7 +363,7 @@ async def node_assess_blast_radius(state: InvestigationState) -> dict[str, Any]:
         "audit_events": override_note
         + [
             f"Remediation proposed: {proposal.action_type.value} on {proposal.target_resource} "
-            f"(Risk: {proposal.risk_tier.value.upper()}, Approval: MANDATORY)"
+            f"(Risk: {proposal.risk_tier.value.upper()}, {approval_note})"
         ],
     }
 
