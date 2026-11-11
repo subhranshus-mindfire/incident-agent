@@ -108,3 +108,44 @@ def test_rate_limiter_allows_up_to_the_limit_then_refuses() -> None:
     assert limiter.allow("client-a")
     assert not limiter.allow("client-a")
     assert limiter.allow("client-b")
+
+
+def test_production_refuses_default_database_password() -> None:
+    import pytest
+
+    from app.config.config import Settings
+
+    with pytest.raises(ValueError, match="default database password"):
+        Settings(_env_file=None, ENVIRONMENT="production")
+
+
+def test_production_refuses_wildcard_origins_and_debug() -> None:
+    import pytest
+
+    from app.config.config import Settings
+
+    with pytest.raises(ValueError) as exc:
+        Settings(
+            _env_file=None,
+            ENVIRONMENT="production",
+            DATABASE_URL="postgresql+asyncpg://app:strong-secret@db:5432/incident_db",
+            ALLOWED_ORIGINS=["*"],
+            DEBUG=True,
+        )
+    assert "every origin" in str(exc.value)
+    assert "DEBUG is enabled" in str(exc.value)
+
+
+def test_production_accepts_explicit_settings_and_development_keeps_defaults() -> None:
+    from app.config.config import Settings
+
+    prod = Settings(
+        _env_file=None,
+        ENVIRONMENT="production",
+        DATABASE_URL="postgresql+asyncpg://app:strong-secret@db:5432/incident_db",
+        ALLOWED_ORIGINS=["https://console.example.com"],
+    )
+    assert prod.ALLOWED_ORIGINS == ["https://console.example.com"]
+
+    dev = Settings(_env_file=None, ENVIRONMENT="development")
+    assert dev.ALLOWED_ORIGINS == []

@@ -1,6 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,8 +14,9 @@ class Settings(BaseSettings):
     PORT: int = 8000
     API_V1_PREFIX: str = "/api/v1"
 
-    # CORS
-    ALLOWED_ORIGINS: list[str] = ["*"]
+    # CORS: browsers may call the API only from these origins. The Streamlit console calls it
+    # from the server, so no origin is needed by default.
+    ALLOWED_ORIGINS: list[str] = []
 
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/incident_db"
@@ -47,6 +49,22 @@ class Settings(BaseSettings):
     OLLAMA_MODEL: str = "qwen2.5:3b"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    @model_validator(mode="after")
+    def refuse_unsafe_production_settings(self) -> "Settings":
+        """Stops a production start with development defaults still in place."""
+        if self.ENVIRONMENT != "production":
+            return self
+        problems = []
+        if "postgres:postgres@" in self.DATABASE_URL:
+            problems.append("DATABASE_URL uses the default database password")
+        if "*" in self.ALLOWED_ORIGINS:
+            problems.append("ALLOWED_ORIGINS allows every origin")
+        if self.DEBUG:
+            problems.append("DEBUG is enabled")
+        if problems:
+            raise ValueError("Unsafe production settings: " + "; ".join(problems))
+        return self
 
 
 @lru_cache
