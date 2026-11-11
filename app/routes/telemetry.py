@@ -2,7 +2,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.auth.current_user import current_user
 from app.schemas.telemetry import (
@@ -15,8 +15,12 @@ from app.schemas.telemetry import (
 from app.services.clients import get_loki_service, get_prometheus_service
 from app.services.loki_service import LokiService
 from app.services.prometheus_service import PrometheusService
+from app.utils.rate_limit import SlidingWindowLimiter
 
 logger = logging.getLogger("incident_agent.routes.telemetry")
+# Raw PromQL and LogQL run whatever the caller writes, so each user gets a small budget per minute.
+_raw_query_limiter = SlidingWindowLimiter(limit=20, window_seconds=60)
+
 router = APIRouter(
     prefix="/telemetry",
     tags=["Observability & Telemetry"],
@@ -36,9 +40,14 @@ SERVICE_QUERY_PARAM = Query(
 @router.get("/metrics/query", response_model=MetricQueryResult, status_code=status.HTTP_200_OK)
 async def query_prometheus_metrics(
     query: str = Query(..., description="PromQL query expression"),
+    username: str = Depends(current_user),
     prom_service: PrometheusService = Depends(get_prometheus_service),
 ) -> MetricQueryResult:
     """Executes an instant PromQL metric query against Prometheus."""
+    if not _raw_query_limiter.allow(username):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many raw queries"
+        )
     return await prom_service.query(promql=query)
 
 
@@ -87,9 +96,14 @@ async def query_loki_logs(
     ),
     limit: int = Query(100, ge=1, le=500, description="Maximum raw lines to scan"),
     deduplicate: bool = Query(True, description="Cluster and deduplicate recurring error lines"),
+    username: str = Depends(current_user),
     loki_service: LokiService = Depends(get_loki_service),
 ) -> LogQueryResult:
     """Queries Grafana Loki logs with automatic secret redaction and log deduplication."""
+    if not _raw_query_limiter.allow(username):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many raw queries"
+        )
     end = datetime.now(UTC)
     span_seconds = window_seconds or window_minutes * 60
     start = datetime.fromtimestamp(end.timestamp() - span_seconds, tz=UTC)
