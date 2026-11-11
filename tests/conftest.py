@@ -1,6 +1,11 @@
+import os
 from collections.abc import AsyncGenerator
 
-import pytest_asyncio
+# Set before the app is imported: the settings are read at import time, and the test
+# environment selects the in-memory checkpointer instead of the PostgreSQL one.
+os.environ["ENVIRONMENT"] = "test"
+
+import pytest_asyncio  # noqa: E402
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
