@@ -247,6 +247,7 @@ class PrometheusService:
         error_rate, req_rate, p95_lat, cpu_pct, mem_pct = (0.0 if v is None else v for v in results)
 
         return GoldenSignalMetrics(
+            window_seconds=float(window_seconds) if window_seconds else window_minutes * 60,
             service=safe_service,
             error_rate_5xx_percent=round(max(0.0, error_rate), 2),
             request_rate_per_sec=round(max(0.0, req_rate), 2),

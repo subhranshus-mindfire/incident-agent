@@ -12,6 +12,9 @@ MAX_WINDOW_SECONDS: Final = 3600
 
 MAX_LOG_LINES: Final = 40
 
+# Below this many requests in the window, an error percentage is one or two requests, not a rate.
+MIN_REQUESTS_FOR_RATE: Final = 10
+
 WINDOW_PATTERN: Final = re.compile(r"\blast\s+(\d+)\s*(seconds?|secs?|s|minutes?|mins?|m)\b")
 
 INVESTIGATE_WORDS: Final = ("investigat", "diagnos", "debug", "analy")

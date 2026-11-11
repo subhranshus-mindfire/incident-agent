@@ -1,6 +1,8 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
+
+from app.constants.live import MIN_REQUESTS_FOR_RATE
 
 
 class MetricPoint(BaseModel):
@@ -34,7 +36,20 @@ class GoldenSignalMetrics(BaseModel):
         default_factory=list,
         description="Signals with no data in the window. Their values are placeholders, not measurements.",
     )
+    window_seconds: float | None = Field(
+        default=None, description="Length of the window the rates were computed over"
+    )
     collected_at: datetime
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def rates_measured(self) -> bool:
+        """True when the window had enough requests for the error rate and latency to mean something."""
+        if "request_rate_per_sec" in self.missing_signals or self.request_rate_per_sec <= 0:
+            return False
+        if self.window_seconds is None:
+            return True
+        return self.request_rate_per_sec * self.window_seconds >= MIN_REQUESTS_FOR_RATE
 
 
 class AnomalyAlert(BaseModel):

@@ -245,3 +245,42 @@ def test_missing_request_metrics_are_not_reported_as_no_traffic() -> None:
         collected_at=datetime.now(UTC),
     )
     assert "not available" in status_verdict("payment-api", missing_rate, "1 min", HEALTHY)
+
+
+def test_error_rate_from_too_few_requests_is_not_reported_as_a_fault() -> None:
+    from datetime import UTC, datetime
+
+    # 0.01 requests per second over 60 s is under one request: a 99% error rate here is noise.
+    sparse = GoldenSignalMetrics(
+        service="payment-api",
+        error_rate_5xx_percent=99.0,
+        request_rate_per_sec=0.01,
+        p95_latency_ms=2300.0,
+        cpu_usage_percent=7.0,
+        memory_usage_percent=20.0,
+        window_seconds=60,
+        collected_at=datetime.now(UTC),
+    )
+    assert sparse.rates_measured is False
+
+    text = status_verdict("payment-api", sparse, "1 min", HEALTHY)
+    assert "5xx" not in text.split("·")[0]
+    assert "unverified" in text
+    assert "degraded" not in text
+
+
+def test_rates_measured_with_enough_requests() -> None:
+    from datetime import UTC, datetime
+
+    busy = GoldenSignalMetrics(
+        service="payment-api",
+        error_rate_5xx_percent=0.5,
+        request_rate_per_sec=2.0,
+        p95_latency_ms=120.0,
+        cpu_usage_percent=7.0,
+        memory_usage_percent=20.0,
+        window_seconds=60,
+        collected_at=datetime.now(UTC),
+    )
+    assert busy.rates_measured is True
+    assert busy.model_dump(mode="json")["rates_measured"] is True
