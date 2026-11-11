@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     QDRANT_COLLECTION: str = "runbooks"
     EMBEDDING_DIMENSION: int = 384
     EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
-    FASTEMBED_CACHE_DIR: str = "/home/appuser/.cache/fastembed"
+    FASTEMBED_CACHE_DIR: str = "~/.cache/fastembed"
 
     # Observability
     PROMETHEUS_URL: str = "http://localhost:9090"

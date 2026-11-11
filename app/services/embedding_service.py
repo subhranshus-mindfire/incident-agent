@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Any, Final, Protocol
 
 from fastembed import TextEmbedding
@@ -34,6 +35,7 @@ class FastEmbedProvider:
 
     @classmethod
     def load(cls, model_name: str, dimension: int, cache_dir: str) -> FastEmbedProvider:
+        cache_dir = os.path.expanduser(cache_dir)
         logger.info(f"Loading embedding model '{model_name}' (cache: {cache_dir})")
         return cls(TextEmbedding(model_name=model_name, cache_dir=cache_dir), dimension)
 
