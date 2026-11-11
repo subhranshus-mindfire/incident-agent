@@ -106,9 +106,19 @@ The agent will execute the live remediation on `payment-api`, verify recovery, i
 
 **Parallel diagnostics.** Telemetry gathering and Qdrant retrieval run at the same time, and the investigation waits for both before correlating evidence.
 
+## 🚧 Limitations and Next Steps
+
+- **Simulated remediation.** Only `payment-api` actions reach a real service. Other remediation actions (such as scaling and rolling restarts) report success without changing any cluster.
+- **No reviewer role.** Any signed-in user can approve or reject a remediation. Role-based approval is the next access-control step.
+- **Single-process rate limiting.** The login and chat limits are kept in process memory, so they are per worker. Moving them to Redis would make them hold across replicas.
+- **Telemetry depends on the live stack.** Prometheus, Loki and Qdrant must be running for the telemetry and deployment tests, and the deployment contract test needs the `payment-api` container.
+- **LangSmith tracing is optional.** It is off unless `LANGSMITH_TRACING=true` and a key are set.
+
+Design decisions are recorded in [docs/adr/](docs/adr/). See [0001: Human approval before live remediation](docs/adr/0001-human-approval-for-remediation.md).
+
 ## 🧪 Running Automated Tests
 
-Run the full automated test suite (50 tests covering state machine, HITL approval, Qdrant vector search, Prometheus/Loki telemetry, simulation, and UI):
+Run the full automated test suite (state machine, HITL approval, Qdrant vector search, Prometheus/Loki telemetry, simulation, and UI):
 
 ```bash
 docker compose run --rm test
