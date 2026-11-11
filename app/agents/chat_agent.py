@@ -9,7 +9,7 @@ from typing import Any
 from groq import BadRequestError
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
-from app.agents.grounding import unsupported_figures
+from app.agents.grounding import reply_problems
 from app.agents.router import route_message
 from app.config.config import get_settings
 from app.constants.llm import (
@@ -43,20 +43,20 @@ def _message_text(message: BaseMessage) -> str:
 
 
 async def _grounded_reply(base_llm: Any, messages: list[BaseMessage], text: str) -> str:
-    """The reply, if every figure in it came from a tool result. Otherwise the model gets one rewrite,
-    and if the rewrite still has figures no tool returned, the figures are withheld."""
+    """The reply, if it is grounded in the tool results. Otherwise the model gets one rewrite, and if the
+    rewrite is still not grounded, the reply is withheld."""
     tool_results = [str(m.content) for m in messages if isinstance(m, ToolMessage)]
-    unsupported = unsupported_figures(text, tool_results)
-    if not unsupported:
+    problems = reply_problems(text, tool_results)
+    if not problems:
         return text
 
-    logger.warning(f"Chat reply has figures no tool returned: {unsupported}")
+    logger.warning(f"Chat reply is not grounded in tool results: {problems}")
     if not isinstance(messages[-1], AIMessage):
         messages = messages + [AIMessage(content=text)]
     rewrite = HumanMessage(
         content=(
-            f"These figures are not in any tool result: {', '.join(unsupported)}. Rewrite the answer "
-            "using only figures from the tool results, or say the value was not measured. Do not call tools."
+            f"The answer is not grounded: {'; '.join(problems)}. Rewrite it using only figures from the tool "
+            "results, say what was not measured, and do not state a cause the data does not show. Do not call tools."
         )
     )
     try:
@@ -64,7 +64,7 @@ async def _grounded_reply(base_llm: Any, messages: list[BaseMessage], text: str)
     except Exception as exc:
         logger.error(f"Grounding rewrite failed: {exc}")
         retried = ""
-    if retried and not unsupported_figures(retried, tool_results):
+    if retried and not reply_problems(retried, tool_results):
         return retried
     return (
         "I could not confirm some figures in my answer against the tool results, so I am not "

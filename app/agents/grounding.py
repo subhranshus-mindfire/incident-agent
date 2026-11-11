@@ -24,3 +24,31 @@ def unsupported_figures(reply: str, tool_results: list[str]) -> list[str]:
         if not any(_close(figure, value) for value in available):
             missing.append(match.group(0).strip())
     return missing
+
+
+# Words that say one thing caused another.
+_CAUSAL: Final = re.compile(
+    r"\b(caus\w*|because|due to|root cause|driven by|led to|results? in)\b", re.IGNORECASE
+)
+_RATES_NOT_MEASURED: Final = re.compile(r'"rates_measured":\s*false')
+
+
+def causal_claims_without_traffic(reply: str, tool_results: list[str]) -> list[str]:
+    """Causal wording in a reply when a tool result says the error rate and latency were not measured."""
+    if not any(_RATES_NOT_MEASURED.search(raw) for raw in tool_results):
+        return []
+    return sorted({match.group(0).lower() for match in _CAUSAL.finditer(reply)})
+
+
+def reply_problems(reply: str, tool_results: list[str]) -> list[str]:
+    """Everything wrong with a reply, as short phrases for the rewrite request. Empty means it is grounded."""
+    problems = [
+        f"figure '{figure}' is not in any tool result"
+        for figure in unsupported_figures(reply, tool_results)
+    ]
+    causal = causal_claims_without_traffic(reply, tool_results)
+    if causal:
+        problems.append(
+            f"it says '{', '.join(causal)}' but the error rate and latency were not measured"
+        )
+    return problems

@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.agents.chat_agent import _grounded_reply
-from app.agents.grounding import unsupported_figures
+from app.agents.grounding import causal_claims_without_traffic, reply_problems, unsupported_figures
 from app.agents.severity import severity_from_evidence
 from app.constants.enums import IncidentSeverity
 from app.schemas.telemetry import GoldenSignalMetrics
@@ -117,3 +117,63 @@ def test_cpu_saturation_sets_high_even_without_traffic() -> None:
 
 def test_moderate_cpu_without_traffic_stays_medium() -> None:
     assert severity_from_evidence(signals(cpu=50.0)) is IncidentSeverity.MEDIUM
+
+
+# --- causal claims need a measured error rate ------------------------------------------------
+
+
+def test_causal_claim_is_flagged_when_traffic_was_not_measured() -> None:
+    results = ['{"p99_latency_seconds": 2.4, "rates_measured": false}']
+    assert causal_claims_without_traffic("High latency is likely causing the errors.", results) == [
+        "causing"
+    ]
+
+
+def test_causal_claim_is_allowed_when_traffic_was_measured() -> None:
+    results = ['{"p99_latency_seconds": 2.4, "rates_measured": true}']
+    assert (
+        causal_claims_without_traffic("High latency is likely causing the errors.", results) == []
+    )
+
+
+def test_reply_problems_reports_both_kinds_of_problem() -> None:
+    results = ['{"rates_measured": false, "cpu": 2.7}']
+    problems = reply_problems("Latency of 2400ms is causing the errors.", results)
+    assert any("2400ms" in p for p in problems)
+    assert any("causing" in p for p in problems)
+
+
+def test_rca_ignores_latency_and_errors_without_traffic() -> None:
+    from app.rca.engine import SREInvestigationEngine
+    from app.schemas.agent_state import TelemetrySummary
+
+    unmeasured = TelemetrySummary(
+        p99_latency_seconds=2.4, http_error_rate_pct=99.0, cpu_usage_pct=2.7, rates_measured=False
+    )
+    hypotheses = SREInvestigationEngine().formulate_rca_hypotheses(
+        service="payment-api",
+        symptoms="HTTP 500 errors",
+        telemetry=unmeasured,
+        logs=[],
+        runbooks=[],
+    )
+    titles = " ".join(h.title for h in hypotheses)
+    assert "Upstream Dependency" not in titles
+    assert "Compute Saturation" not in titles
+
+
+def test_rca_uses_latency_when_traffic_was_measured() -> None:
+    from app.rca.engine import SREInvestigationEngine
+    from app.schemas.agent_state import TelemetrySummary
+
+    measured = TelemetrySummary(
+        p99_latency_seconds=2.4, http_error_rate_pct=6.0, cpu_usage_pct=10.0, rates_measured=True
+    )
+    hypotheses = SREInvestigationEngine().formulate_rca_hypotheses(
+        service="payment-api",
+        symptoms="HTTP 500 errors",
+        telemetry=measured,
+        logs=[],
+        runbooks=[],
+    )
+    assert any("Upstream Dependency" in h.title for h in hypotheses)
