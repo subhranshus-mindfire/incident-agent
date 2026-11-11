@@ -421,3 +421,20 @@ async def test_required_seven_tools_contract(monkeypatch: pytest.MonkeyPatch):
     }
     report = create_incident_report(mock_state)  # type: ignore[arg-type]
     assert "# Incident Postmortem Report" in report.markdown_content
+
+
+def test_run_config_carries_langsmith_labels():
+    service = InvestigationService(graph=object())
+
+    start = service._get_config("inc-1", service="payment-api", severity="critical")
+    resume = service._get_config("inc-1")
+
+    assert start["run_name"] == "investigation"
+    assert start["tags"] == ["incident-agent"]
+    assert start["metadata"] == {
+        "thread_id": "inc-1",
+        "service": "payment-api",
+        "severity": "critical",
+    }
+    assert resume["metadata"] == {"thread_id": "inc-1"}
+    assert resume["configurable"] == {"thread_id": "inc-1"}

@@ -48,11 +48,22 @@ class InvestigationService:
         self.investigation_repo = InvestigationRepository(session) if session else None
         self.audit_repo = AuditLogRepository(session) if session else None
 
-    def _get_config(self, incident_id: str) -> RunnableConfig:
-        """Returns LangGraph execution configuration with thread isolation and recursion limits."""
+    def _get_config(
+        self, incident_id: str, service: str | None = None, severity: str | None = None
+    ) -> RunnableConfig:
+        """Returns LangGraph execution configuration with thread isolation, recursion limits and
+        LangSmith labels. Service and severity are added only when the caller knows them."""
+        metadata: dict[str, str] = {"thread_id": incident_id}
+        if service:
+            metadata["service"] = service
+        if severity:
+            metadata["severity"] = severity
         return RunnableConfig(
             configurable={"thread_id": incident_id},
             recursion_limit=25,
+            run_name="investigation",
+            tags=["incident-agent"],
+            metadata=metadata,
         )
 
     async def start_investigation(
@@ -68,7 +79,7 @@ class InvestigationService:
         Without an explicit severity, the level is classified from the symptoms.
         """
         severity = severity or classify_severity(symptoms)
-        config = self._get_config(incident_id)
+        config = self._get_config(incident_id, service=service, severity=severity.value)
 
         initial_state: InvestigationState = {
             "incident_id": incident_id,
