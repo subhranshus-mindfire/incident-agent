@@ -419,6 +419,7 @@ async def node_execute_remediation(state: InvestigationState) -> dict[str, Any]:
             service=state["service"],
             approval_id=f"appr-{state['incident_id'][:8]}",
             parameters=proposal.parameters,
+            approved=True,  # the approval status was checked at the top of this node
         )
     except Exception as exc:
         # Recorded as a failed execution, so verification and the audit trail still run.
