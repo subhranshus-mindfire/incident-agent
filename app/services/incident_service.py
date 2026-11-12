@@ -50,6 +50,11 @@ class IncidentService:
         """Fetch incident by ID."""
         return await self.incident_repo.get_with_relations(incident_id)
 
+    async def count_incidents(self, service: str | None = None, status: str | None = None) -> int:
+        """Total incidents matching the filters, for showing "N of total" beside a listing."""
+        stat_enum = IncidentStatus(status) if status else None
+        return await self.incident_repo.count_by_filter(service=service, status=stat_enum)
+
     async def list_incidents(
         self,
         service: str | None = None,

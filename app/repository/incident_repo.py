@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -44,6 +44,19 @@ class IncidentRepository(BaseRepository[Incident]):
         query = query.order_by(Incident.created_at.desc()).offset(skip).limit(limit)
         result = await self.session.execute(query)
         return list(result.scalars().all())
+
+    async def count_by_filter(
+        self,
+        service: str | None = None,
+        status: IncidentStatus | None = None,
+    ) -> int:
+        """How many incidents match the filters, regardless of paging."""
+        query = select(func.count()).select_from(Incident)
+        if service:
+            query = query.where(Incident.service == service)
+        if status:
+            query = query.where(Incident.status == status)
+        return int((await self.session.execute(query)).scalar_one())
 
     async def update_status(self, incident_id: str, new_status: IncidentStatus) -> Incident | None:
         """Update the operational status of an incident."""

@@ -32,6 +32,12 @@ from app.utils.serialization import as_plain_dict
 logger = logging.getLogger("incident_agent.investigation_service")
 
 
+def _incident_title(service: str, symptoms: str) -> str:
+    """A title that says what was reported, such as "payment-api: HTTP 500 errors"."""
+    summary = " ".join(symptoms.split())[:80].rstrip()
+    return f"{service}: {summary}" if summary else f"{service} investigation"
+
+
 async def _severity_from_live_evidence(service: str) -> IncidentSeverity:
     """Severity from the service's measured golden signals. Falls back to MEDIUM if they can't be read."""
     try:
@@ -260,7 +266,7 @@ class InvestigationService:
             if not incident:
                 incident = Incident(
                     id=incident_id,
-                    title=f"{service} investigation",
+                    title=_incident_title(service, symptoms),
                     service=service,
                     severity=severity,
                     status=IncidentStatus.MITIGATING

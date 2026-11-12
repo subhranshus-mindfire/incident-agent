@@ -15,8 +15,9 @@ system: |
   - get_live_golden_signals returns rates_measured. When it is false, the window had too few requests, so the
     error rate and latency are not measurements. Say so, and do not report them as faults or as normal.
   - Quote numbers exactly as the tool returned them, with their time window.
-  - To list or count past incidents, call list_stored_incidents. Use search_incident_memory only to find
-    incidents about a topic. Always state how many incidents were returned.
+  - To list or count past incidents, call list_stored_incidents. Copy its "table" into the reply exactly as
+    returned, then say "Showing <returned> of <total>". Do not summarize the rows. Use search_incident_memory
+    only to find incidents about a topic.
   - Call start_investigation only when the user asks to investigate, diagnose or fix a fault. It opens an
     incident record and proposes a remediation. Low and medium risk remediation for a medium-severity incident
     runs automatically; anything else waits for a person.

@@ -198,13 +198,16 @@ async def list_stored_incidents(
     Use this to list or count past incidents. Optional filters: service name and status (for example
     "resolved"). Each entry says whether the incident is also in long-term memory (Qdrant).
     """
+    shown = max(1, min(limit, MAX_LIST_ROWS))
     try:
         # Read the database directly. Calling the API from here would need a sign-in token this tool does not have.
         async with async_session_factory() as session:
-            found = await IncidentService(session).list_incidents(
-                service=service or None,
-                status=status or None,
-                limit=100,  # the listing's maximum; trimmed to `limit` below
+            service_layer = IncidentService(session)
+            total = await service_layer.count_incidents(
+                service=service or None, status=status or None
+            )
+            found = await service_layer.list_incidents(
+                service=service or None, status=status or None, limit=shown
             )
             rows = [IncidentResponse.model_validate(i).model_dump(mode="json") for i in found]
     except Exception as exc:
@@ -216,10 +219,7 @@ async def list_stored_incidents(
     except Exception as exc:
         logger.warning(f"Could not read incident memory: {exc}")
         memory_ids = None
-    rows.sort(key=lambda r: str(r.get("created_at", "")), reverse=True)
-    total_found = len(rows)
-    # Keep tool output small: the model's per-minute token limit is far below 100 full records.
-    rows = rows[: max(1, min(limit, MAX_LIST_ROWS))]
+
     incidents = [
         {
             "title": r.get("title"),
@@ -232,10 +232,32 @@ async def list_stored_incidents(
         for r in rows
     ]
     return {
-        "total_found": total_found,  # capped at 100 by the API
+        "total": total,
         "returned": len(incidents),
+        "table": _incidents_table(incidents),
         "incidents": incidents,
     }
+
+
+def _incidents_table(incidents: list[dict[str, Any]]) -> str:
+    """Markdown table of incidents. Built here so the reply can show every row exactly."""
+    if not incidents:
+        return "No incidents match."
+    lines = [
+        "| Title | Service | Status | Created (UTC) | Resolved (UTC) |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for item in incidents:
+        title = str(item["title"] or "").replace("|", "/")
+        lines.append(
+            f"| {title} | {item['service']} | {item['status']} | "
+            f"{_utc_minute(item['created_at'])} | {_utc_minute(item['resolved_at'])} |"
+        )
+    return "\n".join(lines)
+
+
+def _utc_minute(value: Any) -> str:
+    return str(value)[:16].replace("T", " ") if value else "-"
 
 
 TOOLS = [
