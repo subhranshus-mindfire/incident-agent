@@ -2,7 +2,9 @@ import asyncio
 import logging
 from typing import Any
 
-from app.constants.enums import IncidentSeverity, IncidentStatus
+from app.agents.approval_policy import needs_human_approval
+from app.constants.enums import IncidentStatus
+from app.constants.live import DEFAULT_WINDOW_SECONDS
 from app.constants.remediation import (
     FAULT_REMEDIATIONS,
     VERIFY_SETTLE_SECONDS,
@@ -20,7 +22,6 @@ from app.schemas.agent_state import (
     RCAHypothesis,
     RemediationActionType,
     RemediationExecutionResult,
-    RiskTier,
 )
 from app.schemas.telemetry import GoldenSignalMetrics
 from app.services.clients import get_prometheus_service
@@ -342,17 +343,18 @@ async def node_assess_blast_radius(state: InvestigationState) -> dict[str, Any]:
         severity=state["severity"],
     )
 
-    # Determine approval requirement based on risk tier and severity
-    if proposal.risk_tier == RiskTier.LOW and state["severity"] == IncidentSeverity.MEDIUM:
-        approval_status = ApprovalStatus.AUTO_APPROVED
-        proposal.requires_approval = False
-    else:
-        approval_status = ApprovalStatus.PENDING
-        proposal.requires_approval = True
+    needs_approval = needs_human_approval(proposal.risk_tier, state["severity"])
+    proposal.requires_approval = needs_approval
+    approval_status = ApprovalStatus.PENDING if needs_approval else ApprovalStatus.AUTO_APPROVED
+    approval_note = (
+        "Approval: MANDATORY"
+        if needs_approval
+        else "Approval: AUTOMATIC (medium severity, low or medium risk)"
+    )
 
     logger.info(
         f"[Node 6: AssessBlastRadius] Action: {proposal.action_type.value}, "
-        f"Risk: {proposal.risk_tier.value.upper()}, RequiresApproval: True"
+        f"Risk: {proposal.risk_tier.value.upper()}, RequiresApproval: {needs_approval}"
     )
 
     return {
@@ -362,7 +364,7 @@ async def node_assess_blast_radius(state: InvestigationState) -> dict[str, Any]:
         "audit_events": override_note
         + [
             f"Remediation proposed: {proposal.action_type.value} on {proposal.target_resource} "
-            f"(Risk: {proposal.risk_tier.value.upper()}, Approval: MANDATORY)"
+            f"(Risk: {proposal.risk_tier.value.upper()}, {approval_note})"
         ],
     }
 
@@ -419,6 +421,7 @@ async def node_execute_remediation(state: InvestigationState) -> dict[str, Any]:
             service=state["service"],
             approval_id=f"appr-{state['incident_id'][:8]}",
             parameters=proposal.parameters,
+            approved=True,  # the approval status was checked at the top of this node
         )
     except Exception as exc:
         # Recorded as a failed execution, so verification and the audit trail still run.
@@ -430,7 +433,8 @@ async def node_execute_remediation(state: InvestigationState) -> dict[str, Any]:
         )
 
     executed_list = state.get("executed_actions", []) + [result]
-    new_status = IncidentStatus.RESOLVED if result.success else IncidentStatus.INVESTIGATING
+    # Executing the action does not resolve the incident; the health check after it does.
+    new_status = IncidentStatus.INVESTIGATING
 
     return {
         "executed_actions": executed_list,
@@ -463,7 +467,7 @@ async def node_verify_health(state: InvestigationState) -> dict[str, Any]:
         await asyncio.sleep(VERIFY_SETTLE_SECONDS)
         try:
             current = await get_prometheus_service().get_golden_signals(
-                service=state["service"], window_minutes=1
+                service=state["service"], window_seconds=DEFAULT_WINDOW_SECONDS
             )
         except Exception as exc:
             logger.warning(f"[Node 9: VerifyHealth] Prometheus probe failed: {exc}")
@@ -486,7 +490,7 @@ async def node_verify_health(state: InvestigationState) -> dict[str, Any]:
                 "p95_latency_ms",
                 "request_rate_per_sec",
             }
-            has_traffic = current.request_rate_per_sec > 0 and not not_collected
+            has_traffic = current.rates_measured and not not_collected
             within_thresholds = (
                 current.error_rate_5xx_percent < ERROR_RATE_FAULT_PCT
                 and current.p95_latency_ms < LATENCY_FAULT_MS
@@ -505,6 +509,16 @@ async def node_verify_health(state: InvestigationState) -> dict[str, Any]:
                     if within_thresholds
                     else "Still above stability thresholds."
                 )
+            error_now = (
+                "not collected"
+                if "error_rate_5xx_percent" in not_collected
+                else f"{current.error_rate_5xx_percent:.2f}%"
+            )
+            latency_now = (
+                "not collected"
+                if "p95_latency_ms" in not_collected
+                else f"{current.p95_latency_ms:.0f}ms"
+            )
             report = HealthVerificationReport(
                 stabilized=stabilized,
                 previous_error_rate=prev_error,
@@ -513,14 +527,15 @@ async def node_verify_health(state: InvestigationState) -> dict[str, Any]:
                 current_latency_ms=current.p95_latency_ms,
                 observation_window_seconds=VERIFY_SETTLE_SECONDS,
                 details=(
-                    f"5xx error rate {prev_error:.2f}% -> {current.error_rate_5xx_percent:.2f}%; "
-                    f"p95 latency {prev_latency_ms:.0f}ms -> {current.p95_latency_ms:.0f}ms. {outcome}"
+                    f"5xx error rate {prev_error:.2f}% -> {error_now}; "
+                    f"p95 latency {prev_latency_ms:.0f}ms -> {latency_now}. {outcome}"
                 ),
             )
 
     return {
         "verification_results": report,
         "verification_report": report,
+        "status": IncidentStatus.RESOLVED if report.stabilized else IncidentStatus.INVESTIGATING,
         "audit_events": [
             f"Health verification completed: Stabilized={report.stabilized} ({report.details})"
         ],
@@ -537,7 +552,8 @@ async def node_persist_incident_memory(state: InvestigationState) -> dict[str, A
 
     root_cause = top_hypo.root_cause if top_hypo else "Undetermined"
     remediation = exec_result.action_type if exec_result else "None"
-    outcome = "RESOLVED" if (exec_result and exec_result.success) else "UNRESOLVED"
+    verif = state.get("verification_report")
+    outcome = "RESOLVED" if (verif and verif.stabilized) else "UNRESOLVED"
 
     try:
         qdrant = get_shared_qdrant_service()

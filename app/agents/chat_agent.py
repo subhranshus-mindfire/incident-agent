@@ -9,6 +9,7 @@ from typing import Any
 from groq import BadRequestError
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
+from app.agents.grounding import reply_problems
 from app.agents.router import route_message
 from app.config.config import get_settings
 from app.constants.llm import (
@@ -41,6 +42,36 @@ def _message_text(message: BaseMessage) -> str:
     )
 
 
+async def _grounded_reply(base_llm: Any, messages: list[BaseMessage], text: str) -> str:
+    """The reply, if it is grounded in the tool results. Otherwise the model gets one rewrite, and if the
+    rewrite is still not grounded, the reply is withheld."""
+    tool_results = [str(m.content) for m in messages if isinstance(m, ToolMessage)]
+    problems = reply_problems(text, tool_results)
+    if not problems:
+        return text
+
+    logger.warning(f"Chat reply is not grounded in tool results: {problems}")
+    if not isinstance(messages[-1], AIMessage):
+        messages = messages + [AIMessage(content=text)]
+    rewrite = HumanMessage(
+        content=(
+            f"The answer is not grounded: {'; '.join(problems)}. Rewrite it using only figures from the tool "
+            "results, say what was not measured, and do not state a cause the data does not show. Do not call tools."
+        )
+    )
+    try:
+        retried = _message_text(await base_llm.ainvoke(messages + [rewrite]))
+    except Exception as exc:
+        logger.error(f"Grounding rewrite failed: {exc}")
+        retried = ""
+    if retried and not reply_problems(retried, tool_results):
+        return retried
+    return (
+        "I could not confirm some figures in my answer against the tool results, so I am not "
+        "reporting them. Ask again, or check the console."
+    )
+
+
 def _is_unknown_tool_error(exc: BadRequestError) -> bool:
     text = str(exc)
     return "tool_use_failed" in text or "tool call validation failed" in text
@@ -70,11 +101,9 @@ def _to_messages(history: list[dict[str, str]], message: str) -> list[BaseMessag
     return messages
 
 
-async def run_chat(
-    message: str, history: list[dict[str, str]], approval_pending: bool = False
-) -> dict[str, Any]:
+async def run_chat(message: str, history: list[dict[str, str]]) -> dict[str, Any]:
     """Runs one chat turn: fixed or live answers first, otherwise the model calls tools and answers from them."""
-    routed = await route_message(message, history, approval_pending)
+    routed = await route_message(message)
     if routed.reply is not None:
         return {"reply": routed.reply, "incident": None}
     message = routed.text
@@ -109,7 +138,8 @@ async def run_chat(
             }
         messages.append(ai_message)
         if not ai_message.tool_calls:
-            return {"reply": _message_text(ai_message), "incident": incident}
+            reply = await _grounded_reply(base_llm, messages, _message_text(ai_message))
+            return {"reply": reply, "incident": incident}
 
         for call in ai_message.tool_calls:
             tool_fn = _TOOLS_BY_NAME.get(call["name"])
@@ -146,4 +176,5 @@ async def run_chat(
             "reply": "I could not finish the analysis. Try a narrower question.",
             "incident": incident,
         }
-    return {"reply": _message_text(final), "incident": incident}
+    reply = await _grounded_reply(base_llm, messages, _message_text(final))
+    return {"reply": reply, "incident": incident}

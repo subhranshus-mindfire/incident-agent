@@ -8,6 +8,7 @@ from app.constants.thresholds import (
     MEMORY_CRITICAL_PCT,
 )
 from app.schemas.agent_state import (
+    HealthVerificationReport,
     InvestigationState,
     LogSignature,
     PostmortemReport,
@@ -48,13 +49,27 @@ class SREInvestigationEngine:
         # 1. Telemetry signal extraction
         high_cpu = telemetry.cpu_usage_pct >= CPU_CRITICAL_PCT if telemetry else False
         high_mem = telemetry.memory_usage_pct >= MEMORY_CRITICAL_PCT if telemetry else False
-        high_err = telemetry.http_error_rate_pct >= ERROR_RATE_CRITICAL_PCT if telemetry else False
-        high_lat = telemetry.p99_latency_seconds >= LATENCY_FAULT_MS / 1000 if telemetry else False
+        # Error rate and latency are rules only when the window had enough requests to measure them.
+        traffic_measured = telemetry is not None and telemetry.rates_measured
+        high_err = (
+            traffic_measured and telemetry.http_error_rate_pct >= ERROR_RATE_CRITICAL_PCT
+            if telemetry
+            else False
+        )
+        high_lat = (
+            traffic_measured and telemetry.p99_latency_seconds >= LATENCY_FAULT_MS / 1000
+            if telemetry
+            else False
+        )
 
         if telemetry:
-            citations.append(
-                f"Prometheus: CPU={telemetry.cpu_usage_pct}%, Mem={telemetry.memory_usage_pct}%, "
+            rate_text = (
                 f"ErrRate={telemetry.http_error_rate_pct}%, p99Latency={telemetry.p99_latency_seconds}s"
+                if traffic_measured
+                else "ErrRate and p99Latency not measured (too few requests in the window)"
+            )
+            citations.append(
+                f"Prometheus: CPU={telemetry.cpu_usage_pct}%, Mem={telemetry.memory_usage_pct}%, {rate_text}"
             )
 
         log_text = " ".join([entry.sample_line.lower() for entry in logs])
@@ -72,8 +87,8 @@ class SREInvestigationEngine:
                 RCAHypothesis(
                     title="Database Connection Pool Exhaustion & Lock Contention",
                     root_cause=(
-                        f"Target service '{service}' is encountering transaction lock contention or connection pool starvation. "
-                        "Backing database queries are holding locks for >30s, causing client queues to timeout."
+                        f"Error logs for '{service}' mention connection pool starvation, lock contention or "
+                        "connection timeouts."
                     ),
                     confidence_score=0.92 if "deadlock" in log_text else 0.85,
                     evidence_citations=citations
@@ -87,9 +102,11 @@ class SREInvestigationEngine:
                 RCAHypothesis(
                     title="Compute Saturation & CFS Throttling",
                     root_cause=(
-                        f"Containers for '{service}' are experiencing severe CPU burn (>80%) and kernel CFS throttling, "
-                        "exhausting available thread worker pools and elevating request latency."
-                    ),
+                        f"CPU for '{service}' is {telemetry.cpu_usage_pct}% in the evaluated window"
+                        if telemetry
+                        else f"CPU for '{service}' was not measured"
+                    )
+                    + ", which may be limiting request handling and raising latency.",
                     confidence_score=0.94 if high_cpu else 0.78,
                     evidence_citations=citations
                     + ["CPU metrics exceed operational threshold (80%)"],
@@ -116,8 +133,9 @@ class SREInvestigationEngine:
                 RCAHypothesis(
                     title="Upstream Dependency Degradation / Canary Fault",
                     root_cause=(
-                        f"Recent release or upstream dependency failure in '{service}' is triggering high 5xx error cascades. "
-                        "Circuit breaker has not tripped, allowing cascading failures to propagate."
+                        f"5xx errors for '{service}' are elevated"
+                        + (f" at {telemetry.http_error_rate_pct}%" if telemetry else "")
+                        + ". The cause may be a recent release or an upstream dependency."
                     ),
                     confidence_score=0.88 if high_err else 0.75,
                     evidence_citations=citations + ["HTTP 5xx rate elevated above 5%"],
@@ -232,12 +250,15 @@ class SREInvestigationEngine:
         verif_text = (
             "System fully stabilized within SLA."
             if verif and verif.stabilized
-            else "Manual verification required."
+            else f"Not verified. {verif.details}"
+            if verif
+            else "Not verified. No post-remediation check ran."
         )
 
         timeline_entries = (
             events[-8:] if events else ["Incident registered", "Automated investigation executed"]
         )
+        prevention_items = _prevention_items_for(proposal, verif)
 
         markdown = f"""# Incident Postmortem Report
 **Service:** `{service}` | **Severity:** `{str(state["severity"]).upper()}` | **Status:** `{str(state["status"]).upper()}`
@@ -275,10 +296,7 @@ Root cause analysis isolated **{rc_title}** with a confidence score of {hypothes
 
         markdown += """
 ## 5. Preventative Action Items
-- [ ] Implement tighter alert thresholds on Golden Signals for this tier.
-- [ ] Review horizontal pod autoscaler (HPA) min/max replica boundaries.
-- [ ] Add regression integration tests covering this failure mode.
-"""
+""" + "".join(f"- [ ] {item}\n" for item in prevention_items)
 
         return PostmortemReport(
             incident_id=incident_id,
@@ -288,13 +306,40 @@ Root cause analysis isolated **{rc_title}** with a confidence score of {hypothes
             timeline=timeline_entries,
             remediation_summary=f"Action: {action_name} | Outcome: {status_text}",
             verification_outcome=verif_text,
-            prevention_action_items=[
-                "Review HPA thresholds",
-                "Add circuit breaker to upstream calls",
-                "Verify DB lock timeouts",
-            ],
+            prevention_action_items=prevention_items,
             markdown_content=markdown,
         )
+
+
+_PREVENTION_BY_ACTION: dict[RemediationActionType, list[str]] = {
+    RemediationActionType.TERMINATE_DB_TRANSACTIONS: [
+        "Set lock and statement timeouts on the database",
+        "Alert on connection pool saturation before requests queue",
+    ],
+    RemediationActionType.SCALE_UP_REPLICAS: [
+        "Review HPA min/max replica boundaries",
+        "Alert on CPU saturation before latency rises",
+    ],
+    RemediationActionType.ROLLING_RESTART: [
+        "Find what built up before the restart (memory growth or a stuck worker)",
+        "Review pod readiness and liveness probes",
+    ],
+    RemediationActionType.ROLLBACK_DEPLOYMENT: [
+        "Add a pre-release test for this failure mode",
+        "Gate releases on the 5xx error rate",
+    ],
+}
+
+
+def _prevention_items_for(
+    proposal: RemediationProposal | None, verif: HealthVerificationReport | None
+) -> list[str]:
+    """Follow-up items for the action that was taken, plus a re-check when health was not confirmed."""
+    generic = ["Add an alert for this symptom", "Review the runbook for this service"]
+    items = list(_PREVENTION_BY_ACTION.get(proposal.action_type, generic)) if proposal else generic
+    if verif is None or not verif.stabilized:
+        items.append("Re-check service health once traffic resumes")
+    return items
 
 
 _default_engine: SREInvestigationEngine | None = None

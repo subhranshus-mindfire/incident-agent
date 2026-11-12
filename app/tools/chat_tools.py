@@ -14,13 +14,15 @@ from pydantic import BeforeValidator
 
 from app.auth.context import current_actor
 from app.config.database import async_session_factory
-from app.constants.live import MAX_WINDOW_SECONDS, MIN_WINDOW_SECONDS
+from app.constants.live import MAX_WINDOW_SECONDS, MIN_WINDOW_SECONDS, SEARCH_REQUEST_WORDS
 from app.constants.llm import (
     MAX_LIST_ROWS,
 )
 from app.constants.service_dependencies import SERVICE_DEPENDENCIES
 from app.constants.services import PRIMARY_SERVICE
+from app.schemas.incident import IncidentResponse
 from app.services.clients import get_loki_service, get_prometheus_service
+from app.services.incident_service import IncidentService
 from app.services.investigation_service import InvestigationService, summarize_trigger
 from app.services.loki_service import service_selector
 from app.services.qdrant_service import get_shared_qdrant_service
@@ -56,11 +58,22 @@ async def get_live_golden_signals(service: ServiceName, window_seconds: int = 60
     window = clamp_seconds(window_seconds, MIN_WINDOW_SECONDS, MAX_WINDOW_SECONDS)
     try:
         signals = await get_prometheus_service().get_golden_signals(
-            service=service, window_seconds=window
+            use_cache=True, service=service, window_seconds=window
         )
     except Exception as exc:
         return error_payload(exc)
-    return {**signals.model_dump(mode="json"), "window_seconds": window}
+    data = signals.model_dump(mode="json")
+    # A signal with no data is null, never a zero that looks measured.
+    for name in signals.missing_signals:
+        data[name] = None
+    data.pop("rates_measured", None)
+    return {
+        **data,
+        "error_and_latency": "measured"
+        if signals.rates_measured
+        else "not measured: too few requests in the window",
+        "window_seconds": window,
+    }
 
 
 @tool
@@ -75,6 +88,7 @@ async def get_live_logs(
     now = datetime.now(UTC)
     try:
         result = await get_loki_service().query_range(
+            use_cache=True,
             logql=service_selector(service),
             start=now - timedelta(seconds=window),
             end=now,
@@ -127,6 +141,11 @@ async def start_investigation(service: ServiceName, symptoms: str) -> dict[str, 
     """Open a full incident investigation for a service. Creates an incident record, gathers evidence,
     and proposes a remediation that waits for human approval. Use only when the user asks to investigate,
     diagnose or fix a fault."""
+    if any(word in symptoms.lower() for word in SEARCH_REQUEST_WORDS):
+        return {
+            "error": "This asks about past incidents, so no investigation was opened. "
+            "Use list_stored_incidents or search_incident_memory instead."
+        }
     incident_id = str(uuid4())
     try:
         async with async_session_factory() as session:
@@ -196,17 +215,18 @@ async def list_stored_incidents(
     Use this to list or count past incidents. Optional filters: service name and status (for example
     "resolved"). Each entry says whether the incident is also in long-term memory (Qdrant).
     """
-    base_url = os.getenv("AGENT_SELF_URL", "http://localhost:8000").rstrip("/")
-    params: dict[str, Any] = {"limit": 100}  # the API's maximum; trimmed to `limit` below
-    if service:
-        params["service"] = service
-    if status:
-        params["status"] = status
+    shown = max(1, min(limit, MAX_LIST_ROWS))
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            res = await client.get(f"{base_url}/api/v1/incidents", params=params)
-            res.raise_for_status()
-            rows = res.json()
+        # Read the database directly. Calling the API from here would need a sign-in token this tool does not have.
+        async with async_session_factory() as session:
+            service_layer = IncidentService(session)
+            total = await service_layer.count_incidents(
+                service=service or None, status=status or None
+            )
+            found = await service_layer.list_incidents(
+                service=service or None, status=status or None, limit=shown
+            )
+            rows = [IncidentResponse.model_validate(i).model_dump(mode="json") for i in found]
     except Exception as exc:
         return error_payload(exc)
     try:
@@ -216,10 +236,7 @@ async def list_stored_incidents(
     except Exception as exc:
         logger.warning(f"Could not read incident memory: {exc}")
         memory_ids = None
-    rows.sort(key=lambda r: str(r.get("created_at", "")), reverse=True)
-    total_found = len(rows)
-    # Keep tool output small: the model's per-minute token limit is far below 100 full records.
-    rows = rows[: max(1, min(limit, MAX_LIST_ROWS))]
+
     incidents = [
         {
             "title": r.get("title"),
@@ -232,10 +249,32 @@ async def list_stored_incidents(
         for r in rows
     ]
     return {
-        "total_found": total_found,  # capped at 100 by the API
+        "total": total,
         "returned": len(incidents),
+        "table": _incidents_table(incidents),
         "incidents": incidents,
     }
+
+
+def _incidents_table(incidents: list[dict[str, Any]]) -> str:
+    """Markdown table of incidents. Built here so the reply can show every row exactly."""
+    if not incidents:
+        return "No incidents match."
+    lines = [
+        "| Title | Service | Status | Created (UTC) | Resolved (UTC) |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for item in incidents:
+        title = str(item["title"] or "").replace("|", "/")
+        lines.append(
+            f"| {title} | {item['service']} | {item['status']} | "
+            f"{_utc_minute(item['created_at'])} | {_utc_minute(item['resolved_at'])} |"
+        )
+    return "\n".join(lines)
+
+
+def _utc_minute(value: Any) -> str:
+    return str(value)[:16].replace("T", " ") if value else "-"
 
 
 TOOLS = [

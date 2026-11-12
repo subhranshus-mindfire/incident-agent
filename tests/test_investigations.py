@@ -401,9 +401,16 @@ async def test_required_seven_tools_contract(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(investigation_tools, "_apply_payment_api_remediation", fake_apply)
     rem_res = await execute_remediation(
-        action="ROLLBACK_DEPLOYMENT", service="payment-api", approval_id="appr-123"
+        action="ROLLBACK_DEPLOYMENT", service="payment-api", approval_id="appr-123", approved=True
     )
     assert rem_res.success is True
+
+    # Without the workflow's approval, the same high-risk rollback is refused.
+    refused = await execute_remediation(
+        action="ROLLBACK_DEPLOYMENT", service="payment-api", approval_id="appr-123"
+    )
+    assert refused.success is False
+    assert "needs approval" in refused.message
 
     # 7. create_incident_report
     mock_state = {
@@ -421,3 +428,47 @@ async def test_required_seven_tools_contract(monkeypatch: pytest.MonkeyPatch):
     }
     report = create_incident_report(mock_state)  # type: ignore[arg-type]
     assert "# Incident Postmortem Report" in report.markdown_content
+
+
+def test_run_config_carries_langsmith_labels():
+    service = InvestigationService(graph=object())
+
+    start = service._get_config("inc-1", service="payment-api", severity="critical")
+    resume = service._get_config("inc-1")
+
+    assert start["run_name"] == "investigation"
+    assert start["tags"] == ["incident-agent"]
+    assert start["metadata"] == {
+        "thread_id": "inc-1",
+        "service": "payment-api",
+        "severity": "critical",
+    }
+    assert resume["metadata"] == {"thread_id": "inc-1"}
+    assert resume["configurable"] == {"thread_id": "inc-1"}
+
+
+async def test_executor_refuses_live_high_risk_action_without_approval():
+    from app.schemas.agent_state import RemediationActionType, RemediationProposal, RiskTier
+    from app.services.remediation_service import RemediationExecutor
+
+    proposal = RemediationProposal(
+        action_type=RemediationActionType.ROLLING_RESTART,
+        target_resource="deployment/payment-api",
+        parameters={},
+        risk_tier=RiskTier.CRITICAL,
+        blast_radius="All payment traffic",
+        rollback_plan="Stop the restart",
+        requires_approval=True,
+    )
+    executor = RemediationExecutor()
+
+    refused = await executor.execute_action(proposal, dry_run=False)
+    assert refused.success is False
+    assert "needs approval" in refused.message
+
+    approved = await executor.execute_action(proposal, dry_run=False, approved=True)
+    assert approved.success is True
+
+    dry = await executor.execute_action(proposal, dry_run=True)
+    assert dry.success is True
+    assert "[DRY RUN]" in dry.message

@@ -1,6 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,14 +14,19 @@ class Settings(BaseSettings):
     PORT: int = 8000
     API_V1_PREFIX: str = "/api/v1"
 
-    # CORS
-    ALLOWED_ORIGINS: list[str] = ["*"]
+    # CORS: browsers may call the API only from these origins. The Streamlit console calls it
+    # from the server, so no origin is needed by default.
+    ALLOWED_ORIGINS: list[str] = []
 
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/incident_db"
 
-    # Redis
+    # Redis: shared rate limits across workers. "memory" keeps the counts in each process instead.
     REDIS_URL: str = "redis://localhost:6379/0"
+    RATE_LIMIT_STORE: Literal["redis", "memory"] = "redis"
+    # Short-lived cache of live golden signals for chat answers. Investigations never read it.
+    CACHE_ENABLED: bool = True
+    CACHE_TTL_SECONDS: int = 10
 
     # Qdrant & Embeddings
     QDRANT_HOST: str = "localhost"
@@ -29,7 +35,7 @@ class Settings(BaseSettings):
     QDRANT_COLLECTION: str = "runbooks"
     EMBEDDING_DIMENSION: int = 384
     EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
-    FASTEMBED_CACHE_DIR: str = "/home/appuser/.cache/fastembed"
+    FASTEMBED_CACHE_DIR: str = "~/.cache/fastembed"
 
     # Observability
     PROMETHEUS_URL: str = "http://localhost:9090"
@@ -47,6 +53,26 @@ class Settings(BaseSettings):
     OLLAMA_MODEL: str = "qwen2.5:3b"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    @model_validator(mode="after")
+    def refuse_unsafe_production_settings(self) -> "Settings":
+        """Stops a production start with development defaults still in place."""
+        if self.ENVIRONMENT != "production":
+            return self
+        problems = []
+        if "postgres:postgres@" in self.DATABASE_URL:
+            problems.append("DATABASE_URL uses the default database password")
+        if "*" in self.ALLOWED_ORIGINS:
+            problems.append("ALLOWED_ORIGINS allows every origin")
+        if self.DEBUG:
+            problems.append("DEBUG is enabled")
+        if self.RATE_LIMIT_STORE == "redis" and "localhost" in self.REDIS_URL:
+            problems.append(
+                "REDIS_URL points at localhost, so workers on other hosts share no limits"
+            )
+        if problems:
+            raise ValueError("Unsafe production settings: " + "; ".join(problems))
+        return self
 
 
 @lru_cache

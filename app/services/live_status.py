@@ -17,6 +17,7 @@ import httpx
 from app.constants.live import (
     DEFAULT_WINDOW_SECONDS,
     GOLDEN_WORDS,
+    HISTORY_WORDS,
     INVESTIGATE_WORDS,
     LOGS_PATTERN,
     MAX_LOG_LINES,
@@ -84,6 +85,8 @@ def classify_live_request(text: str) -> LiveRequest | None:
     """Returns a live request for status, log or metric questions, or None when the agent should answer."""
     low = text.lower()
     if any(word in low for word in INVESTIGATE_WORDS):
+        return None
+    if any(word in low for word in HISTORY_WORDS):
         return None
     if any(word in low for word in OTHER_TOPIC_WORDS):
         return None
@@ -157,8 +160,7 @@ def status_verdict(
         if isinstance(active, dict):
             faults += [f"active fault: {name}" for name, on in active.items() if on]
 
-    rate = signals.request_rate_per_sec
-    traffic_known = "request_rate_per_sec" not in missing and rate > 0
+    traffic_known = signals.rates_measured
     measured = traffic_known and not {"error_rate_5xx_percent", "p95_latency_ms"} & missing
     if measured:
         if signals.error_rate_5xx_percent >= ERROR_RATE_FAULT_PCT:
@@ -171,8 +173,12 @@ def status_verdict(
     if "request_rate_per_sec" in missing:
         traffic_line = f"Request metrics are not available, so error rate and latency are unverified. {cpu_text}."
     elif not traffic_known:
-        # Zero traffic makes the error rate 0 by arithmetic, so it proves nothing about health.
-        traffic_line = f"No requests in the last {label}, so error rate and latency are unverified. {cpu_text}."
+        # Too few requests make the error rate a fraction of one request, so it proves nothing about health.
+        requests = signals.request_rate_per_sec * (signals.window_seconds or 0)
+        traffic_line = (
+            f"Only {requests:.0f} request(s) in the last {label}, so error rate and latency are unverified. "
+            f"{cpu_text}."
+        )
     else:
         traffic_line = (
             f"5xx `{signals.error_rate_5xx_percent:.2f}%` · p95 `{signals.p95_latency_ms:.0f}ms` · "
@@ -223,6 +229,7 @@ async def answer_live(request: LiveRequest, service: str) -> str:
         now = datetime.now(UTC)
         try:
             result = await get_loki_service().query_range(
+                use_cache=True,
                 logql=service_selector(service),
                 start=now - timedelta(seconds=request.window_seconds),
                 end=now,
@@ -241,7 +248,7 @@ async def answer_live(request: LiveRequest, service: str) -> str:
 
     try:
         signals = await get_prometheus_service().get_golden_signals(
-            service=service, window_seconds=request.window_seconds
+            use_cache=True, service=service, window_seconds=request.window_seconds
         )
     except Exception as exc:
         logger.warning(f"Live metrics query failed: {exc}")

@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from app.constants.live import DEFAULT_WINDOW_SECONDS
 from app.constants.remediation import (
     FAULT_REMEDIATIONS,
     PAYMENT_API_REMEDIATIONS,
@@ -33,7 +34,7 @@ from app.schemas.service import ServiceDependencyMap
 from app.schemas.telemetry import GoldenSignalMetrics, LogQueryResult
 from app.services.clients import get_loki_service, get_prometheus_service
 from app.services.qdrant_service import get_shared_qdrant_service
-from app.services.remediation_service import get_remediation_executor
+from app.services.remediation_service import get_remediation_executor, refusal_without_approval
 
 logger = logging.getLogger("incident_agent.tools")
 
@@ -73,12 +74,13 @@ async def get_system_metrics(
     """Tool 2: Retrieves Prometheus golden signals (error rate, latency, CPU, memory)."""
     prom = get_prometheus_service()
     try:
-        gs = await prom.get_golden_signals(service=service)
+        gs = await prom.get_golden_signals(service=service, window_seconds=DEFAULT_WINDOW_SECONDS)
         if isinstance(gs, GoldenSignalMetrics):
             anomalies: list[str] = []
-            if gs.error_rate_5xx_percent > ERROR_RATE_CRITICAL_PCT:
+            # Error rate and latency are reported only when the window had enough requests to measure them.
+            if gs.rates_measured and gs.error_rate_5xx_percent > ERROR_RATE_CRITICAL_PCT:
                 anomalies.append(f"High 5xx error rate: {gs.error_rate_5xx_percent:.1f}%")
-            if gs.p95_latency_ms > LATENCY_FAULT_MS:
+            if gs.rates_measured and gs.p95_latency_ms > LATENCY_FAULT_MS:
                 anomalies.append(f"Elevated p95 latency: {gs.p95_latency_ms:.0f}ms")
             if gs.cpu_usage_percent > CPU_CRITICAL_PCT:
                 anomalies.append(f"Severe CPU saturation: {gs.cpu_usage_percent:.1f}%")
@@ -90,6 +92,7 @@ async def get_system_metrics(
                 cpu_usage_pct=gs.cpu_usage_percent,
                 memory_usage_pct=gs.memory_usage_percent,
                 detected_anomalies=anomalies,
+                rates_measured=gs.rates_measured,
             )
     except Exception as exc:
         logger.warning(f"Prometheus fetch failed: {exc}")
@@ -155,29 +158,39 @@ async def execute_remediation(
     service: str,
     approval_id: str | None = None,
     parameters: dict[str, Any] | None = None,
+    approved: bool = False,
 ) -> RemediationExecutionResult:
-    """Tool 6: Executes a whitelisted, idempotent mock or live remediation action."""
+    """Tool 6: Executes a whitelisted, idempotent mock or live remediation action.
+
+    `approved` must be True only after the workflow's approval gate. A high-risk action
+    without it is refused, whichever backend would run it.
+    """
     executor = get_remediation_executor()
     try:
         action_type = RemediationActionType(action)
     except ValueError:
         action_type = RemediationActionType.MANUAL_ESCALATION
 
+    risk_tier = RiskTier.LOW if "SCALE" in action else RiskTier.CRITICAL
     proposal = RemediationProposal(
         action_type=action_type,
         target_resource=f"deployment/{service}",
         parameters=parameters or {},
-        risk_tier=RiskTier.LOW if "SCALE" in action else RiskTier.CRITICAL,
+        risk_tier=risk_tier,
         blast_radius=f"Remediation on {service} (approval_id={approval_id})",
         rollback_plan=f"Revert action {action} on {service}",
-        requires_approval=approval_id is None,
+        requires_approval=risk_tier is not RiskTier.LOW,
     )
+
+    refusal = refusal_without_approval(proposal, approved)
+    if refusal is not None:
+        return refusal
 
     # payment-api is the live target: success is only reported once its health confirms the fix.
     if service == PRIMARY_SERVICE:
         return await _apply_payment_api_remediation(action_type)
 
-    return await executor.execute_action(proposal, dry_run=False)
+    return await executor.execute_action(proposal, dry_run=False, approved=approved)
 
 
 async def get_active_faults(service: str) -> dict[str, bool] | None:

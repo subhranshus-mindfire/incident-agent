@@ -7,7 +7,7 @@ from langgraph.graph.state import CompiledStateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.graph import get_investigation_graph
-from app.agents.severity import classify_severity
+from app.agents.severity import severity_from_evidence
 from app.constants.enums import (
     AuditAction,
     EvidenceType,
@@ -15,6 +15,7 @@ from app.constants.enums import (
     IncidentStatus,
     InvestigationStatus,
 )
+from app.constants.live import DEFAULT_WINDOW_SECONDS
 from app.exceptions.domain import EntityNotFoundException, InvalidStateTransitionException
 from app.models.incident import Incident
 from app.models.investigation import Investigation
@@ -25,9 +26,28 @@ from app.schemas.agent_state import (
     ApprovalStatus,
     InvestigationState,
 )
+from app.services.clients import get_prometheus_service
 from app.utils.serialization import as_plain_dict
 
 logger = logging.getLogger("incident_agent.investigation_service")
+
+
+def _incident_title(service: str, symptoms: str) -> str:
+    """A title that says what was reported, such as "payment-api: HTTP 500 errors"."""
+    summary = " ".join(symptoms.split())[:80].rstrip()
+    return f"{service}: {summary}" if summary else f"{service} investigation"
+
+
+async def _severity_from_live_evidence(service: str) -> IncidentSeverity:
+    """Severity from the service's measured golden signals. Falls back to MEDIUM if they can't be read."""
+    try:
+        signals = await get_prometheus_service().get_golden_signals(
+            service=service, window_seconds=DEFAULT_WINDOW_SECONDS
+        )
+    except Exception as exc:
+        logger.warning(f"Severity fell back to MEDIUM; golden signals unavailable: {exc}")
+        return IncidentSeverity.MEDIUM
+    return severity_from_evidence(signals)
 
 
 class InvestigationService:
@@ -48,11 +68,22 @@ class InvestigationService:
         self.investigation_repo = InvestigationRepository(session) if session else None
         self.audit_repo = AuditLogRepository(session) if session else None
 
-    def _get_config(self, incident_id: str) -> RunnableConfig:
-        """Returns LangGraph execution configuration with thread isolation and recursion limits."""
+    def _get_config(
+        self, incident_id: str, service: str | None = None, severity: str | None = None
+    ) -> RunnableConfig:
+        """Returns LangGraph execution configuration with thread isolation, recursion limits and
+        LangSmith labels. Service and severity are added only when the caller knows them."""
+        metadata: dict[str, str] = {"thread_id": incident_id}
+        if service:
+            metadata["service"] = service
+        if severity:
+            metadata["severity"] = severity
         return RunnableConfig(
             configurable={"thread_id": incident_id},
             recursion_limit=25,
+            run_name="investigation",
+            tags=["incident-agent"],
+            metadata=metadata,
         )
 
     async def start_investigation(
@@ -67,8 +98,8 @@ class InvestigationService:
 
         Without an explicit severity, the level is classified from the symptoms.
         """
-        severity = severity or classify_severity(symptoms)
-        config = self._get_config(incident_id)
+        severity = severity or await _severity_from_live_evidence(service)
+        config = self._get_config(incident_id, service=service, severity=severity.value)
 
         initial_state: InvestigationState = {
             "incident_id": incident_id,
@@ -235,7 +266,7 @@ class InvestigationService:
             if not incident:
                 incident = Incident(
                     id=incident_id,
-                    title=f"{service} investigation",
+                    title=_incident_title(service, symptoms),
                     service=service,
                     severity=severity,
                     status=IncidentStatus.MITIGATING

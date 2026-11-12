@@ -10,6 +10,26 @@ from app.schemas.agent_state import (
 logger = logging.getLogger("incident_agent.remediation_service")
 
 
+def refusal_without_approval(
+    proposal: RemediationProposal, approved: bool
+) -> RemediationExecutionResult | None:
+    """A refusal when a live action needs human approval and none was given, otherwise None.
+
+    Every live execution path calls this, so an action cannot run only because a caller skipped
+    the approval gate in the workflow.
+    """
+    if not proposal.requires_approval or approved:
+        return None
+    logger.warning(
+        f"Refused {proposal.action_type.value} on {proposal.target_resource}: no human approval"
+    )
+    return RemediationExecutionResult(
+        success=False,
+        action_type=proposal.action_type.value,
+        message=f"Refused: {proposal.action_type.value} on {proposal.target_resource} needs approval.",
+    )
+
+
 class RemediationExecutor:
     """Safe, sandboxed execution adapter for operational remediation actions.
 
@@ -21,8 +41,10 @@ class RemediationExecutor:
         self,
         proposal: RemediationProposal,
         dry_run: bool = False,
+        approved: bool = False,
     ) -> RemediationExecutionResult:
-        """Executes a whitelisted remediation action."""
+        """Executes a whitelisted remediation action. Live actions that need approval are refused
+        unless `approved` is set by the workflow after its approval gate."""
         action = proposal.action_type
         target = proposal.target_resource
         params = proposal.parameters
@@ -39,6 +61,10 @@ class RemediationExecutor:
                 executed_at=datetime.now(UTC),
                 stdout="Dry run validation passed without errors.",
             )
+
+        refusal = refusal_without_approval(proposal, approved)
+        if refusal is not None:
+            return refusal
 
         if action == RemediationActionType.SCALE_UP_REPLICAS:
             delta = params.get("replicas_delta", 2)

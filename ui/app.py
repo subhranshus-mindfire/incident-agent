@@ -49,6 +49,15 @@ st.markdown(
 
     /* ── App shell ── */
     .stApp { background: #212121 !important; color: #ECECEC; }
+    /* Sidebar stays open at a fixed width; the collapse controls are hidden. */
+    section[data-testid="stSidebar"] {
+        display: block !important;
+        visibility: visible !important;
+        min-width: 280px !important;
+        max-width: 280px !important;
+        transform: none !important;
+    }
+    [data-testid="stSidebarCollapseButton"], [data-testid="collapsedControl"] { display: none !important; }
     header[data-testid="stHeader"] { background: transparent !important; }
     #MainMenu, footer, .stDeployButton, [data-testid="stDecoration"],
     [data-testid="stToolbar"], [data-testid="stToolbarActions"] { display: none !important; }
@@ -454,7 +463,6 @@ def _answer(prompt: str) -> None:
                 data={
                     "message": prompt,
                     "history": history,
-                    "approval_pending": st.session_state.current_incident is not None,
                 },
                 timeout=300.0,
                 headers=_auth_headers(),

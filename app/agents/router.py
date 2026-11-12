@@ -1,24 +1,15 @@
 """Decides how a chat message is answered before the language model is involved.
 
-Order: short follow-ups are rewritten, greetings get a fixed reply, live status/log/metric questions
-read telemetry directly, and everything else goes to the agent.
+Order: greetings get a fixed reply, live status/log/metric questions read telemetry directly,
+dependency questions read the service map, and everything else goes to the agent. Chat never
+approves anything: the agent has no approve tool, and approval happens on the approval card.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.constants.chat import (
-    AFFIRMATIVE_PATTERN,
-    APPROVAL_INTENT_PATTERN,
-    APPROVAL_REPLY,
-    APPROVAL_WAITING_MARKERS,
-    FOLLOWUP_FIX_PATTERN,
-    GREETING_REPLIES,
-    INVESTIGATION_KEYWORDS,
-    KNOWN_SERVICES,
-)
-from app.constants.services import PRIMARY_SERVICE
+from app.constants.chat import GREETING_REPLIES, INVESTIGATION_KEYWORDS
 from app.services.dependency_view import dependency_reply
 from app.services.live_status import answer_live, classify_live_request, resolve_service
 from app.utils.text import squeeze_repeats
@@ -32,17 +23,6 @@ class RoutedMessage:
     reply: str | None
 
 
-def resolve_follow_up(text: str, history: list[dict[str, str]]) -> str:
-    """Expands a short follow-up such as 'fix it' into a request about the service discussed last."""
-    if not FOLLOWUP_FIX_PATTERN.match(text.strip()):
-        return text
-    last_reply = next(
-        (turn["content"] for turn in reversed(history) if turn["role"] == "assistant"), ""
-    )
-    service = next((name for name in KNOWN_SERVICES if name in last_reply), PRIMARY_SERVICE)
-    return f"Investigate {service} degradation and propose a fix."
-
-
 def greeting_reply(text: str) -> str | None:
     low = squeeze_repeats(text.lower().strip().rstrip("!.,?"))
     if any(word in text.lower() for word in INVESTIGATION_KEYWORDS):
@@ -54,23 +34,8 @@ def greeting_reply(text: str) -> str | None:
     return None
 
 
-def _awaiting_approval(history: list[dict[str, str]]) -> bool:
-    last_reply = next(
-        (turn["content"] for turn in reversed(history) if turn["role"] == "assistant"), ""
-    )
-    return any(marker in last_reply.lower() for marker in APPROVAL_WAITING_MARKERS)
-
-
-async def route_message(
-    message: str, history: list[dict[str, str]], approval_pending: bool = False
-) -> RoutedMessage:
-    # The approval card is on screen, so a request to act on it is answered by pointing to the card.
-    if approval_pending and APPROVAL_INTENT_PATTERN.search(message) and "?" not in message:
-        return RoutedMessage(text=message.strip(), reply=APPROVAL_REPLY)
-    if AFFIRMATIVE_PATTERN.match(message.strip()) and _awaiting_approval(history):
-        return RoutedMessage(text=message.strip(), reply=APPROVAL_REPLY)
-
-    text = resolve_follow_up(message.strip(), history)
+async def route_message(message: str) -> RoutedMessage:
+    text = message.strip()
 
     greeting = greeting_reply(text)
     if greeting is not None:
