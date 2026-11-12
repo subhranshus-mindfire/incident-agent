@@ -14,7 +14,7 @@ from pydantic import BeforeValidator
 
 from app.auth.context import current_actor
 from app.config.database import async_session_factory
-from app.constants.live import MAX_WINDOW_SECONDS, MIN_WINDOW_SECONDS
+from app.constants.live import MAX_WINDOW_SECONDS, MIN_WINDOW_SECONDS, SEARCH_REQUEST_WORDS
 from app.constants.llm import (
     MAX_LIST_ROWS,
 )
@@ -62,7 +62,18 @@ async def get_live_golden_signals(service: ServiceName, window_seconds: int = 60
         )
     except Exception as exc:
         return error_payload(exc)
-    return {**signals.model_dump(mode="json"), "window_seconds": window}
+    data = signals.model_dump(mode="json")
+    # A signal with no data is null, never a zero that looks measured.
+    for name in signals.missing_signals:
+        data[name] = None
+    data.pop("rates_measured", None)
+    return {
+        **data,
+        "error_and_latency": "measured"
+        if signals.rates_measured
+        else "not measured: too few requests in the window",
+        "window_seconds": window,
+    }
 
 
 @tool
@@ -130,6 +141,11 @@ async def start_investigation(service: ServiceName, symptoms: str) -> dict[str, 
     """Open a full incident investigation for a service. Creates an incident record, gathers evidence,
     and proposes a remediation that waits for human approval. Use only when the user asks to investigate,
     diagnose or fix a fault."""
+    if any(word in symptoms.lower() for word in SEARCH_REQUEST_WORDS):
+        return {
+            "error": "This asks about past incidents, so no investigation was opened. "
+            "Use list_stored_incidents or search_incident_memory instead."
+        }
     incident_id = str(uuid4())
     try:
         async with async_session_factory() as session:

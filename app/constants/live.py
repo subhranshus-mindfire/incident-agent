@@ -19,6 +19,30 @@ WINDOW_PATTERN: Final = re.compile(r"\blast\s+(\d+)\s*(seconds?|secs?|s|minutes?
 
 INVESTIGATE_WORDS: Final = ("investigat", "diagnos", "debug", "analy")
 
+# Wording of a search for past incidents. An investigation must never be opened from it.
+SEARCH_REQUEST_WORDS: Final = (
+    "search",
+    "matching",
+    "how many",
+    "list ",
+    "past incident",
+    "previous incident",
+)
+
+# Questions about past or matching incidents. They are answered from the incident records, never from
+# live metrics, even when they name a signal such as CPU.
+HISTORY_WORDS: Final = (
+    "incident",
+    "past",
+    "previous",
+    "history",
+    "matching",
+    "involved",
+    "similar",
+    "search",
+    "how many",
+)
+
 STATUS_PATTERN: Final = re.compile(r"\b(down|up|status|healthy|alive|working|available|outage)\b")
 
 LOGS_PATTERN: Final = re.compile(r"\blogs?\b")

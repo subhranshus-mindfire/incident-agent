@@ -17,6 +17,7 @@ import httpx
 from app.constants.live import (
     DEFAULT_WINDOW_SECONDS,
     GOLDEN_WORDS,
+    HISTORY_WORDS,
     INVESTIGATE_WORDS,
     LOGS_PATTERN,
     MAX_LOG_LINES,
@@ -84,6 +85,8 @@ def classify_live_request(text: str) -> LiveRequest | None:
     """Returns a live request for status, log or metric questions, or None when the agent should answer."""
     low = text.lower()
     if any(word in low for word in INVESTIGATE_WORDS):
+        return None
+    if any(word in low for word in HISTORY_WORDS):
         return None
     if any(word in low for word in OTHER_TOPIC_WORDS):
         return None

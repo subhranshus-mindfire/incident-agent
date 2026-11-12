@@ -255,3 +255,70 @@ def test_rates_measured_with_enough_requests() -> None:
     )
     assert busy.rates_measured is True
     assert busy.model_dump(mode="json")["rates_measured"] is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Any incident matching CPU burn?",
+        "What incidents involved CPU burn?",
+        "Search past incidents for CPU saturation",
+        "How many incidents had high CPU?",
+    ],
+)
+def test_incident_history_questions_are_not_answered_with_live_metrics(text: str) -> None:
+    from app.services.live_status import classify_live_request
+
+    assert classify_live_request(text) is None
+
+
+def test_live_cpu_question_still_gets_live_metrics() -> None:
+    from app.services.live_status import classify_live_request
+
+    request = classify_live_request("What is the CPU usage right now?")
+    assert request is not None and request.kind == "metrics"
+
+
+async def test_missing_signals_are_null_and_error_status_is_plain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.tools import chat_tools
+
+    no_traffic = GoldenSignalMetrics(
+        service="payment-api",
+        error_rate_5xx_percent=0.0,
+        request_rate_per_sec=0.0,
+        p95_latency_ms=0.0,
+        cpu_usage_percent=0.3,
+        memory_usage_percent=0.0,
+        missing_signals=["error_rate_5xx_percent", "p95_latency_ms"],
+        window_seconds=60,
+        collected_at=datetime.now(UTC),
+    )
+
+    class _Prom:
+        async def get_golden_signals(self, **kwargs):
+            return no_traffic
+
+    monkeypatch.setattr(chat_tools, "get_prometheus_service", lambda: _Prom())
+    result = await chat_tools.get_live_golden_signals.ainvoke({"service": "payment-api"})
+
+    assert result["error_rate_5xx_percent"] is None
+    assert result["p95_latency_ms"] is None
+    assert result["cpu_usage_percent"] == 0.3
+    assert "rates_measured" not in result
+    assert result["error_and_latency"].startswith("not measured")
+
+
+async def test_start_investigation_refuses_a_search_for_past_incidents() -> None:
+    from app.tools import chat_tools
+
+    result = await chat_tools.start_investigation.ainvoke(
+        {
+            "service": "payment-api",
+            "symptoms": "Search past incidents for database connection pool exhaustion",
+        }
+    )
+
+    assert "error" in result
+    assert "no investigation was opened" in result["error"]
