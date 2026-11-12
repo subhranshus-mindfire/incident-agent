@@ -58,7 +58,7 @@ async def get_live_golden_signals(service: ServiceName, window_seconds: int = 60
     window = clamp_seconds(window_seconds, MIN_WINDOW_SECONDS, MAX_WINDOW_SECONDS)
     try:
         signals = await get_prometheus_service().get_golden_signals(
-            service=service, window_seconds=window
+            use_cache=True, service=service, window_seconds=window
         )
     except Exception as exc:
         return error_payload(exc)
@@ -77,6 +77,7 @@ async def get_live_logs(
     now = datetime.now(UTC)
     try:
         result = await get_loki_service().query_range(
+            use_cache=True,
             logql=service_selector(service),
             start=now - timedelta(seconds=window),
             end=now,

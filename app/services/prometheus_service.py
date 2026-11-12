@@ -22,6 +22,7 @@ from app.schemas.telemetry import (
     MetricQueryResult,
     MetricSeries,
 )
+from app.utils.cache import get_cache
 from app.utils.http_client import get_shared_http_client
 
 logger = logging.getLogger("incident_agent.prometheus_service")
@@ -207,12 +208,34 @@ class PrometheusService:
         service: str,
         window_minutes: int = 15,
         window_seconds: int | None = None,
+        use_cache: bool = False,
     ) -> GoldenSignalMetrics:
         """Computes Google SRE Golden Signals for a given service.
 
         `window_seconds`, when given, overrides `window_minutes` for live, short-range questions.
+        `use_cache` serves a result computed in the last few seconds. Only live chat answers pass it:
+        investigations and post-fix verification always read fresh metrics.
         """
         safe_service = self._validate_service(service)
+        cache = get_cache() if use_cache else None
+        key = f"cache:golden:{safe_service}:{window_seconds or window_minutes * 60}"
+        if cache is not None:
+            cached = await cache.get(key)
+            if cached is not None:
+                return GoldenSignalMetrics.model_validate_json(cached)
+
+        signals = await self._compute_golden_signals(safe_service, window_minutes, window_seconds)
+        if cache is not None:
+            await cache.set(key, signals.model_dump_json(), settings.CACHE_TTL_SECONDS)
+        return signals
+
+    async def _compute_golden_signals(
+        self,
+        safe_service: str,
+        window_minutes: int,
+        window_seconds: int | None,
+    ) -> GoldenSignalMetrics:
+        """Runs the Prometheus queries behind get_golden_signals. The service name is already validated."""
         window = f"{window_seconds}s" if window_seconds else f"{window_minutes}m"
 
         # Injection-safe PromQL queries for Golden Signals

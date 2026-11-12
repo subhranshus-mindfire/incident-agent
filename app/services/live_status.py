@@ -226,6 +226,7 @@ async def answer_live(request: LiveRequest, service: str) -> str:
         now = datetime.now(UTC)
         try:
             result = await get_loki_service().query_range(
+                use_cache=True,
                 logql=service_selector(service),
                 start=now - timedelta(seconds=request.window_seconds),
                 end=now,
@@ -244,7 +245,7 @@ async def answer_live(request: LiveRequest, service: str) -> str:
 
     try:
         signals = await get_prometheus_service().get_golden_signals(
-            service=service, window_seconds=request.window_seconds
+            use_cache=True, service=service, window_seconds=request.window_seconds
         )
     except Exception as exc:
         logger.warning(f"Live metrics query failed: {exc}")

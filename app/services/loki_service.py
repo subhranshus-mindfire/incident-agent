@@ -17,6 +17,7 @@ from app.schemas.telemetry import (
     LogQueryResult,
     LogStream,
 )
+from app.utils.cache import get_cache
 from app.utils.http_client import get_shared_http_client
 
 logger = logging.getLogger("incident_agent.loki_service")
@@ -203,8 +204,38 @@ class LokiService:
         end: datetime,
         limit: int = 100,
         deduplicate: bool = True,
+        use_cache: bool = False,
     ) -> LogQueryResult:
-        """Executes a LogQL range query with automatic secret redaction and log deduplication."""
+        """Executes a LogQL range query with automatic secret redaction and log deduplication.
+
+        `use_cache` serves a result for the same query computed in the last few seconds. The end time is
+        rounded to the cache interval so that rolling "last N seconds" requests share one entry. Only live
+        chat answers pass it: investigations always read fresh logs.
+        """
+        cache = get_cache() if use_cache else None
+        bucket = int(end.timestamp()) // settings.CACHE_TTL_SECONDS
+        window = int((end - start).total_seconds())
+        query_hash = hashlib.sha256(logql.encode("utf-8")).hexdigest()[:16]
+        key = f"cache:logs:{query_hash}:{window}:{limit}:{deduplicate}:{bucket}"
+        if cache is not None:
+            cached = await cache.get(key)
+            if cached is not None:
+                return LogQueryResult.model_validate_json(cached)
+
+        result = await self._query_range_uncached(logql, start, end, limit, deduplicate)
+        if cache is not None:
+            await cache.set(key, result.model_dump_json(), settings.CACHE_TTL_SECONDS)
+        return result
+
+    async def _query_range_uncached(
+        self,
+        logql: str,
+        start: datetime,
+        end: datetime,
+        limit: int,
+        deduplicate: bool,
+    ) -> LogQueryResult:
+        """Runs the Loki range query behind query_range."""
         params: dict[str, Any] = {
             "query": logql,
             "start": int(start.timestamp() * 1e9),  # Loki expects nanoseconds

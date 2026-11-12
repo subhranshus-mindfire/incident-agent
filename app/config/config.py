@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # Redis: shared rate limits across workers. "memory" keeps the counts in each process instead.
     REDIS_URL: str = "redis://localhost:6379/0"
     RATE_LIMIT_STORE: Literal["redis", "memory"] = "redis"
+    # Short-lived cache of live golden signals for chat answers. Investigations never read it.
+    CACHE_ENABLED: bool = True
+    CACHE_TTL_SECONDS: int = 10
 
     # Qdrant & Embeddings
     QDRANT_HOST: str = "localhost"

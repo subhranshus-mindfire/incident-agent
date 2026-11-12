@@ -6,6 +6,8 @@ from collections.abc import AsyncGenerator
 os.environ["ENVIRONMENT"] = "test"
 # Rate limits stay in each test process, so test runs do not share counts through a live Redis.
 os.environ["RATE_LIMIT_STORE"] = "memory"
+# Tests read live metrics from their fakes, never from a cache left by an earlier run.
+os.environ["CACHE_ENABLED"] = "false"
 
 import pytest_asyncio  # noqa: E402
 from httpx import ASGITransport, AsyncClient
