@@ -20,7 +20,9 @@ from app.constants.llm import (
 )
 from app.constants.service_dependencies import SERVICE_DEPENDENCIES
 from app.constants.services import PRIMARY_SERVICE
+from app.schemas.incident import IncidentResponse
 from app.services.clients import get_loki_service, get_prometheus_service
+from app.services.incident_service import IncidentService
 from app.services.investigation_service import InvestigationService, summarize_trigger
 from app.services.loki_service import service_selector
 from app.services.qdrant_service import get_shared_qdrant_service
@@ -196,17 +198,15 @@ async def list_stored_incidents(
     Use this to list or count past incidents. Optional filters: service name and status (for example
     "resolved"). Each entry says whether the incident is also in long-term memory (Qdrant).
     """
-    base_url = os.getenv("AGENT_SELF_URL", "http://localhost:8000").rstrip("/")
-    params: dict[str, Any] = {"limit": 100}  # the API's maximum; trimmed to `limit` below
-    if service:
-        params["service"] = service
-    if status:
-        params["status"] = status
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            res = await client.get(f"{base_url}/api/v1/incidents", params=params)
-            res.raise_for_status()
-            rows = res.json()
+        # Read the database directly. Calling the API from here would need a sign-in token this tool does not have.
+        async with async_session_factory() as session:
+            found = await IncidentService(session).list_incidents(
+                service=service or None,
+                status=status or None,
+                limit=100,  # the listing's maximum; trimmed to `limit` below
+            )
+            rows = [IncidentResponse.model_validate(i).model_dump(mode="json") for i in found]
     except Exception as exc:
         return error_payload(exc)
     try:
